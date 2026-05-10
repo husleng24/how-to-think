@@ -1,3 +1,4 @@
+pub mod ai;
 pub mod atomic_write;
 pub mod commands;
 pub mod documents;
@@ -32,6 +33,7 @@ pub fn run() {
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
             commands::create_markdown_document,
+            commands::preview_ai_context_snapshot,
             commands::open_markdown_document,
             commands::save_markdown_document,
             commands::rename_markdown_document,

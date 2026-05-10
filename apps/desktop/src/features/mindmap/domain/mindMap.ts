@@ -1059,7 +1059,7 @@ function moveSubtree(
     command,
     {
       document: touchDocument(state.document, nodes, timestamp),
-      selection: state.selection,
+      selection: { selectedNodeId: node.id, focusedNodeId: node.id },
       viewport: state.viewport,
       contentRevision: state.contentRevision,
     },

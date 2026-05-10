@@ -1,3 +1,4 @@
+use crate::ai::context::{build_context_snapshot, AiContextSnapshot, AiContextSnapshotRequest};
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
@@ -275,6 +276,19 @@ pub fn validate_workspace_relative_path(relative_path: String) -> Result<String,
         Platform::current().default_case_sensitive(),
         WorkspaceOperation::OpenFile,
     )
+}
+
+#[tauri::command]
+pub fn preview_ai_context_snapshot(
+    app: AppHandle,
+    request: AiContextSnapshotRequest,
+) -> Result<AiContextSnapshot, WorkspaceError> {
+    let record = workspace_record_for_id(
+        &app,
+        &request.workspace_id,
+        WorkspaceOperation::BuildAiContext,
+    )?;
+    build_context_snapshot(&record, request)
 }
 
 fn settings_store(

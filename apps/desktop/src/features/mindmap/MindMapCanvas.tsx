@@ -13,7 +13,7 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { KeyboardEvent, PointerEvent, WheelEvent } from 'react';
+import type { KeyboardEvent, MouseEvent, PointerEvent, WheelEvent } from 'react';
 
 import type {
   MindMapCommand,
@@ -25,9 +25,11 @@ import type {
 import {
   getClosestVisibleNodeId,
   getMindMapCommandAvailability,
+  mindMapDropIntentToCommand,
+  resolveMindMapDropIntent,
   resolveMindMapShortcut,
 } from './interaction';
-import type { MindMapEditorAction } from './interaction';
+import type { MindMapDropIntent, MindMapEditorAction } from './interaction';
 import { getMindMapLayoutNode, layoutMindMapDocument } from './layout';
 import type { MindMapLayoutNode, MindMapLayoutResult } from './layout';
 import './MindMapCanvas.css';
@@ -39,11 +41,19 @@ interface MindMapCanvasProps {
   onRedo?(): MindMapCommandResult | void;
 }
 
-interface DragState {
+interface PanDragState {
   pointerId: number;
   startClientX: number;
   startClientY: number;
   startViewport: ViewportState;
+}
+
+interface BranchDragState {
+  pointerId: number;
+  nodeId: NodeId;
+  startClientX: number;
+  startClientY: number;
+  active: boolean;
 }
 
 interface EditingState {
@@ -58,11 +68,15 @@ const MAX_ZOOM = 2.4;
 const FIT_MAX_ZOOM = 1.25;
 const DEFAULT_VIEWPORT_WIDTH = 900;
 const DEFAULT_VIEWPORT_HEIGHT = 540;
+const BRANCH_DRAG_THRESHOLD = 5;
 
 export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanvasProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const dragRef = useRef<DragState | null>(null);
+  const panDragRef = useRef<PanDragState | null>(null);
+  const branchDragRef = useRef<BranchDragState | null>(null);
+  const suppressNextNodeClickRef = useRef(false);
   const [editing, setEditing] = useState<EditingState | null>(null);
+  const [dropIntent, setDropIntent] = useState<MindMapDropIntent | null>(null);
   const layout = useMemo(
     () => layoutMindMapDocument(state.document),
     [state.document],
@@ -75,6 +89,14 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
   const collapseSelectedLabel = selectedNode?.collapsed
     ? 'Expand selected branch'
     : 'Collapse selected branch';
+  const rendererClassName = [
+    'mindmap-renderer',
+    panDragRef.current ? 'is-panning' : '',
+    dropIntent ? 'is-branch-dragging' : '',
+    dropIntent?.type === 'invalid' ? 'is-invalid-drop' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
   useEffect(() => {
     if (editing && !state.document.nodes[editing.nodeId]) {
@@ -242,22 +264,94 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
     });
   };
 
-  const handlePointerDown = (event: PointerEvent<HTMLDivElement>): void => {
-    if (event.button !== 0 || !canStartPan(event.target)) {
+  const handleNodePointerDown = (
+    nodeId: NodeId,
+    event: PointerEvent<HTMLElement>,
+  ): void => {
+    if (!isPrimaryPointerButton(event) || editing) {
       return;
     }
 
-    dragRef.current = {
+    const viewport = viewportRef.current;
+    if (!viewport) {
+      return;
+    }
+
+    branchDragRef.current = {
+      pointerId: event.pointerId,
+      nodeId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      active: false,
+    };
+    capturePointer(viewport, event.pointerId);
+    event.stopPropagation();
+  };
+
+  const handleNodeClick = (
+    nodeId: NodeId,
+    event: MouseEvent<HTMLButtonElement>,
+  ): void => {
+    if (suppressNextNodeClickRef.current) {
+      suppressNextNodeClickRef.current = false;
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    onCommand({ type: 'select-node', nodeId });
+    onCommand({ type: 'focus-node', nodeId });
+  };
+
+  const handleNodeFocus = (nodeId: NodeId): void => {
+    if (branchDragRef.current) {
+      return;
+    }
+
+    onCommand({ type: 'focus-node', nodeId });
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLDivElement>): void => {
+    if (!isPrimaryPointerButton(event) || !canStartPan(event.target)) {
+      return;
+    }
+
+    panDragRef.current = {
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
       startViewport: state.viewport,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    capturePointer(event.currentTarget, event.pointerId);
   };
 
   const handlePointerMove = (event: PointerEvent<HTMLDivElement>): void => {
-    const drag = dragRef.current;
+    const branchDrag = branchDragRef.current;
+    if (branchDrag && branchDrag.pointerId === event.pointerId) {
+      const deltaX = event.clientX - branchDrag.startClientX;
+      const deltaY = event.clientY - branchDrag.startClientY;
+
+      if (!branchDrag.active) {
+        if (Math.hypot(deltaX, deltaY) < BRANCH_DRAG_THRESHOLD) {
+          return;
+        }
+
+        branchDrag.active = true;
+        suppressNextNodeClickRef.current = true;
+      }
+
+      setDropIntent(
+        resolveMindMapDropIntent(state, layout, {
+          draggedNodeId: branchDrag.nodeId,
+          point: getLayoutPointFromPointer(event, state.viewport),
+        }),
+      );
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
+    const drag = panDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) {
       return;
     }
@@ -269,20 +363,47 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
   };
 
   const finishPointerDrag = (event: PointerEvent<HTMLDivElement>): void => {
-    const drag = dragRef.current;
+    const branchDrag = branchDragRef.current;
+    if (branchDrag && branchDrag.pointerId === event.pointerId) {
+      releasePointer(event.currentTarget, event.pointerId);
+
+      if (branchDrag.active) {
+        const intent = resolveMindMapDropIntent(state, layout, {
+          draggedNodeId: branchDrag.nodeId,
+          point: getLayoutPointFromPointer(event, state.viewport),
+        });
+        const command = mindMapDropIntentToCommand(intent);
+
+        suppressNextNodeClickRef.current = true;
+        window.setTimeout(() => {
+          suppressNextNodeClickRef.current = false;
+        }, 0);
+
+        if (command) {
+          runCommand(command);
+        }
+
+        event.preventDefault();
+        event.stopPropagation();
+      }
+
+      branchDragRef.current = null;
+      setDropIntent(null);
+      return;
+    }
+
+    const drag = panDragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) {
       return;
     }
 
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-    }
-    dragRef.current = null;
+    releasePointer(event.currentTarget, event.pointerId);
+    panDragRef.current = null;
   };
 
   return (
     <section
-      className={`mindmap-renderer${dragRef.current ? ' is-panning' : ''}`}
+      className={rendererClassName}
       aria-label="Editable mind map canvas"
     >
       <div className="mindmap-controls" aria-label="Canvas controls">
@@ -470,9 +591,13 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
                 onCancelEditing={cancelEditing}
                 onCommand={onCommand}
                 onCommitEditing={commitEditing}
+                onFocusNode={handleNodeFocus}
+                onNodeClick={handleNodeClick}
+                onNodePointerDown={handleNodePointerDown}
                 onUpdateEditDraft={updateEditingDraft}
               />
             ))}
+            <MindMapDropIndicator intent={dropIntent} layout={layout} />
           </div>
         )}
       </div>
@@ -490,6 +615,9 @@ function MindMapNodeView({
   onCancelEditing,
   onCommand,
   onCommitEditing,
+  onFocusNode,
+  onNodeClick,
+  onNodePointerDown,
   onUpdateEditDraft,
 }: {
   layoutNode: MindMapLayoutNode;
@@ -501,6 +629,9 @@ function MindMapNodeView({
   onCancelEditing(): void;
   onCommand(command: MindMapCommand): MindMapCommandResult | void;
   onCommitEditing(): void;
+  onFocusNode(nodeId: NodeId): void;
+  onNodeClick(nodeId: NodeId, event: MouseEvent<HTMLButtonElement>): void;
+  onNodePointerDown(nodeId: NodeId, event: PointerEvent<HTMLElement>): void;
   onUpdateEditDraft(draft: string): void;
 }) {
   const editorRef = useRef<HTMLTextAreaElement | null>(null);
@@ -578,9 +709,10 @@ function MindMapNodeView({
           type="button"
           aria-label={displayText}
           aria-pressed={selected}
-          onClick={() => onCommand({ type: 'select-node', nodeId: layoutNode.id })}
+          onClick={(event) => onNodeClick(layoutNode.id, event)}
           onDoubleClick={() => onBeginEditing(layoutNode.id)}
-          onFocus={() => onCommand({ type: 'focus-node', nodeId: layoutNode.id })}
+          onFocus={() => onFocusNode(layoutNode.id)}
+          onPointerDown={(event) => onNodePointerDown(layoutNode.id, event)}
         >
           <span className="mindmap-node-kicker">
             <span className="mindmap-node-depth">
@@ -617,6 +749,61 @@ function MindMapNodeView({
         </span>
       ) : null}
     </div>
+  );
+}
+
+function MindMapDropIndicator({
+  intent,
+  layout,
+}: {
+  intent: MindMapDropIntent | null;
+  layout: MindMapLayoutResult;
+}) {
+  if (!intent?.targetNodeId) {
+    return null;
+  }
+
+  const targetNode = getMindMapLayoutNode(layout, intent.targetNodeId);
+  if (!targetNode) {
+    return null;
+  }
+
+  if (intent.type === 'move-as-child' || intent.type === 'invalid') {
+    return (
+      <div
+        className={`mindmap-drop-indicator ${
+          intent.type === 'invalid' ? 'is-invalid' : 'is-child'
+        }`}
+        data-drop-intent={intent.type}
+        data-testid="mindmap-drop-indicator"
+        aria-hidden="true"
+        style={{
+          left: targetNode.x + CONTENT_PADDING,
+          top: targetNode.y + CONTENT_PADDING,
+          width: targetNode.width,
+          height: targetNode.height,
+        }}
+      />
+    );
+  }
+
+  const indicatorTop =
+    intent.type === 'reorder-before'
+      ? targetNode.y + CONTENT_PADDING
+      : targetNode.y + targetNode.height + CONTENT_PADDING;
+
+  return (
+    <div
+      className="mindmap-drop-indicator is-reorder"
+      data-drop-intent={intent.type}
+      data-testid="mindmap-drop-indicator"
+      aria-hidden="true"
+      style={{
+        left: targetNode.x + CONTENT_PADDING - 16,
+        top: indicatorTop - 2,
+        width: targetNode.width + 32,
+      }}
+    />
   );
 }
 
@@ -667,6 +854,41 @@ function getViewportSize(element: HTMLDivElement | null): { width: number; heigh
 
 function clampZoom(zoom: number): number {
   return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom));
+}
+
+function getLayoutPointFromPointer(
+  event: PointerEvent<HTMLElement>,
+  viewport: ViewportState,
+): { x: number; y: number } {
+  const rect = event.currentTarget.getBoundingClientRect();
+  const localX = event.clientX - rect.left;
+  const localY = event.clientY - rect.top;
+
+  return {
+    x: (localX - viewport.x) / viewport.zoom - CONTENT_PADDING,
+    y: (localY - viewport.y) / viewport.zoom - CONTENT_PADDING,
+  };
+}
+
+function capturePointer(element: HTMLElement, pointerId: number): void {
+  if (typeof element.setPointerCapture === 'function') {
+    element.setPointerCapture(pointerId);
+  }
+}
+
+function releasePointer(element: HTMLElement, pointerId: number): void {
+  if (
+    typeof element.hasPointerCapture === 'function' &&
+    element.hasPointerCapture(pointerId) &&
+    typeof element.releasePointerCapture === 'function'
+  ) {
+    element.releasePointerCapture(pointerId);
+  }
+}
+
+function isPrimaryPointerButton(event: PointerEvent<HTMLElement>): boolean {
+  const button = (event as PointerEvent<HTMLElement> & { button?: number }).button;
+  return button === undefined || button === 0;
 }
 
 function canStartPan(target: EventTarget | null): boolean {

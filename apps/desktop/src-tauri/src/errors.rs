@@ -16,6 +16,7 @@ pub enum WorkspaceErrorCode {
     InvalidWorkspacePath,
     InvalidRelativePath,
     PathOutsideWorkspace,
+    InvalidAiContextRequest,
     UnsupportedFileType,
     FileNotFound,
     FileAlreadyExists,
@@ -43,6 +44,7 @@ pub enum WorkspaceOperation {
     RenameFile,
     DeleteFile,
     WatchWorkspace,
+    BuildAiContext,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

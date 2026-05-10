@@ -144,6 +144,7 @@ button {
 .side-panel {
   min-width: 0;
   padding: 18px;
+  overflow: auto;
   background: #f9f7f2;
 }
 
@@ -376,6 +377,323 @@ button {
   margin: 0;
   overflow-wrap: anywhere;
   color: #2f3334;
+}
+
+.proposal-panel {
+  display: grid;
+  gap: 14px;
+  padding: 18px 0;
+  border-top: 1px solid #dfd7ca;
+}
+
+.proposal-panel.empty {
+  color: #5b564f;
+}
+
+.proposal-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.proposal-panel-heading h2 {
+  margin: 6px 0 0;
+  color: #202225;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.proposal-status {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #c6c0b5;
+  border-radius: 999px;
+  background: #fffdf8;
+  color: #4e4a45;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.proposal-status.ready,
+.proposal-status.applied {
+  border-color: #6c9a7c;
+  color: #24573a;
+}
+
+.proposal-status.failed,
+.proposal-status.conflict {
+  border-color: #bd6b5e;
+  color: #8a2d24;
+}
+
+.proposal-status.applying {
+  border-color: #6d6aa8;
+  color: #343071;
+}
+
+.proposal-empty {
+  margin: 0;
+  color: #5b564f;
+  line-height: 1.45;
+}
+
+.proposal-summary {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.proposal-summary div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+}
+
+.proposal-summary dt,
+.proposal-file-list small,
+.proposal-operation-list small {
+  color: #6a6259;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.proposal-summary dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #2f3334;
+}
+
+.proposal-message-list,
+.proposal-impact-grid,
+.proposal-file-list,
+.proposal-operation-list {
+  display: grid;
+  gap: 8px;
+}
+
+.proposal-message {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid #d6c7a6;
+  border-radius: 8px;
+  background: #fff7df;
+  color: #5f4216;
+}
+
+.proposal-message.error {
+  border-color: #d2a29b;
+  background: #fff0ee;
+  color: #7c2e27;
+}
+
+.proposal-message.info {
+  border-color: #bfd3ce;
+  background: #eef8f4;
+  color: #24573a;
+}
+
+.proposal-message strong,
+.proposal-file-list span,
+.proposal-operation-list strong,
+.proposal-markdown-preview strong {
+  display: block;
+  color: inherit;
+}
+
+.proposal-message p {
+  margin: 3px 0 0;
+  line-height: 1.4;
+}
+
+.proposal-message small {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+
+.proposal-risk-confirmations {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #d6c7a6;
+  border-radius: 8px;
+}
+
+.proposal-risk-confirmations legend {
+  padding: 0 4px;
+  color: #6a6259;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.proposal-risk-confirmations label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #3d3a36;
+  font-size: 0.86rem;
+  text-transform: capitalize;
+}
+
+.proposal-impact-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.proposal-impact-grid div {
+  display: grid;
+  min-height: 72px;
+  align-content: center;
+  justify-items: center;
+  gap: 3px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.proposal-impact-icon {
+  display: inline-flex;
+  color: #317682;
+}
+
+.proposal-impact-grid strong {
+  color: #202225;
+  font-size: 1.1rem;
+}
+
+.proposal-impact-grid span:last-child {
+  color: #6a6259;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.proposal-section {
+  display: grid;
+  gap: 8px;
+}
+
+.proposal-section h3 {
+  margin: 0;
+  color: #202225;
+  font-size: 0.9rem;
+}
+
+.proposal-file-list,
+.proposal-operation-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-file-list li,
+.proposal-operation-list li {
+  padding: 10px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.proposal-file-list li {
+  display: grid;
+  gap: 4px;
+}
+
+.proposal-file-list span,
+.proposal-operation-list span {
+  overflow-wrap: anywhere;
+}
+
+.proposal-file-list em {
+  color: #7c4b18;
+  font-size: 0.78rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.proposal-operation-list p {
+  margin: 5px 0;
+  color: #4e4a45;
+  line-height: 1.35;
+}
+
+.proposal-markdown-preview {
+  display: grid;
+  gap: 6px;
+}
+
+.proposal-markdown-preview > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.proposal-markdown-preview pre {
+  min-height: 96px;
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #202225;
+  color: #f6efe3;
+  font-size: 0.72rem;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.proposal-disabled-reasons {
+  display: grid;
+  gap: 5px;
+  color: #7c4b18;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.proposal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.proposal-actions .text-button {
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  font-size: 0.84rem;
+}
+
+.proposal-actions .accept {
+  border-color: #6c9a7c;
+  color: #24573a;
+}
+
+.proposal-actions .reject {
+  border-color: #bd6b5e;
+  color: #8a2d24;
+}
+
+.proposal-actions .text-button:disabled {
+  border-color: #d8d0c3;
+  color: #9b9286;
+  background: #f4f1eb;
+}
+
+.spin {
+  animation: proposal-spin 0.9s linear infinite;
+}
+
+@keyframes proposal-spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .status-bar {

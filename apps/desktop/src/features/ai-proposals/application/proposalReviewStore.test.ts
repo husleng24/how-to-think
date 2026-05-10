@@ -1,0 +1,140 @@
+import {
+  beginApplyingProposalReview,
+  canAcceptProposalReview,
+  confirmProposalRiskFlag,
+  createCurrentFileProposalFixture,
+  createDeletionProposalFixture,
+  createEmptyProposalSuggestionFixture,
+  createInvalidProposalSuggestionFixture,
+  createMultiFileProposalFixture,
+  createProposalFixtureContext,
+  createProposalPreviewModel,
+  createProposalReview,
+  createProposalReviewEditorSnapshot,
+  createProposalReviewStore,
+  createReadyProposalReviewFixture,
+  createStaleProposalReviewFixture,
+  getAcceptDisabledMessages,
+  receiveAiConversationProposal,
+  rejectProposalReview,
+} from '../index';
+import { createMindMapEditorState } from '../../../domain/mindMap';
+
+describe('proposal review lifecycle', () => {
+  it('moves proposals through validation, ready, applying, applied, failed, and conflict states', () => {
+    const store = createProposalReviewStore();
+    const proposal = createReadyProposalReviewFixture().proposal;
+    const snapshot = createProposalReviewEditorSnapshot();
+
+    expect(proposal).toBeDefined();
+    if (!proposal) {
+      return;
+    }
+
+    const received = store.receiveProposal(proposal, snapshot);
+    expect(received.status).toBe('ready');
+    expect(store.startValidation()?.status).toBe('validating');
+    expect(store.markReady()?.status).toBe('ready');
+    expect(store.beginApply()?.status).toBe('applying');
+    expect(store.beginApply()).toBe(store.getState().activeReview);
+    expect(store.markApplied()?.status).toBe('applied');
+    expect(store.markFailed('proposal_apply_failed', 'Apply adapter unavailable.')?.status).toBe('failed');
+    expect(store.markConflict()?.status).toBe('conflict');
+  });
+
+  it('keeps invalid, stale, and unconfirmed high-risk proposals from being accepted', () => {
+    const deletionReview = createProposalReview(
+      createDeletionProposalFixture(),
+      createProposalReviewEditorSnapshot(),
+    );
+    expect(deletionReview.status).toBe('ready');
+    expect(canAcceptProposalReview(deletionReview)).toBe(false);
+    expect(getAcceptDisabledMessages(deletionReview).map((message) => message.code)).toContain(
+      'proposal_high_risk_unconfirmed',
+    );
+
+    const confirmedDeletionReview = confirmProposalRiskFlag(deletionReview, 'node_deletion');
+    expect(canAcceptProposalReview(confirmedDeletionReview)).toBe(true);
+    expect(beginApplyingProposalReview(confirmedDeletionReview).status).toBe('applying');
+
+    const staleReview = createStaleProposalReviewFixture();
+    expect(staleReview.status).toBe('conflict');
+    expect(canAcceptProposalReview(staleReview)).toBe(false);
+
+    const invalidReview = receiveAiConversationProposal({
+      suggestion: createInvalidProposalSuggestionFixture(),
+      validationContext: createProposalFixtureContext(),
+      editorSnapshot: createProposalReviewEditorSnapshot(),
+    });
+    expect(invalidReview.status).toBe('failed');
+    expect(canAcceptProposalReview(invalidReview)).toBe(false);
+  });
+
+  it('rejects without changing captured editor state references', () => {
+    const document = { id: 'doc-ref' };
+    const undoHistory = { undoStack: [{ id: 'undo-ref' }], redoStack: [] };
+    const selection = { selectedNodeId: 'alpha', focusedNodeId: 'alpha' };
+    const snapshot = createProposalReviewEditorSnapshot({
+      document,
+      markdownBuffer: '# Stable\n',
+      undoHistory,
+      selection,
+      isDirty: true,
+    });
+    const review = createProposalReview(createMultiFileProposalFixture(), snapshot);
+    const rejected = rejectProposalReview(review, 'Not needed.');
+
+    expect(rejected.status).toBe('rejected');
+    expect(rejected.editorSnapshot.document).toBe(document);
+    expect(rejected.editorSnapshot.markdownBuffer).toBe('# Stable\n');
+    expect(rejected.editorSnapshot.fileVersion).toBe(snapshot.fileVersion);
+    expect(rejected.editorSnapshot.isDirty).toBe(true);
+    expect(rejected.editorSnapshot.undoHistory).toBe(undoHistory);
+    expect(rejected.editorSnapshot.selection).toBe(selection);
+  });
+
+  it('creates a review from AI conversation output and rejects back to the unchanged editor', () => {
+    const editorState = createMindMapEditorState();
+    const snapshot = createProposalReviewEditorSnapshot({
+      document: editorState.document,
+      undoHistory: editorState.history,
+      selection: editorState.selection,
+    });
+    const proposal = createCurrentFileProposalFixture();
+    const review = receiveAiConversationProposal({
+      suggestion: {
+        ...proposal,
+        suggestionId: proposal.proposalId,
+      },
+      validationContext: createProposalFixtureContext(),
+      editorSnapshot: snapshot,
+    });
+    const store = createProposalReviewStore({ activeReview: review });
+    const archived = store.rejectActive('Skip generated suggestion.');
+
+    expect(review.status).toBe('ready');
+    expect(archived?.status).toBe('rejected');
+    expect(store.getState().activeReview).toBeNull();
+    expect(store.getState().archivedReviews[0].editorSnapshot.document).toBe(editorState.document);
+    expect(editorState.document).toBe(snapshot.document);
+    expect(editorState.history).toBe(snapshot.undoHistory);
+    expect(editorState.selection).toBe(snapshot.selection);
+    expect(editorState.isDirty).toBe(false);
+  });
+
+  it('maps typed validation and conflict messages into actionable review copy', () => {
+    const invalidReview = receiveAiConversationProposal({
+      suggestion: createEmptyProposalSuggestionFixture(),
+      validationContext: createProposalFixtureContext(),
+      editorSnapshot: createProposalReviewEditorSnapshot(),
+    });
+    expect(invalidReview.messages.map((message) => message.code)).toContain('empty_operations');
+    expect(invalidReview.messages.find((message) => message.code === 'empty_operations')?.title).toBe(
+      'Empty proposal',
+    );
+
+    const stalePreview = createProposalPreviewModel(createStaleProposalReviewFixture());
+    expect(stalePreview.messages.map((message) => message.code)).toContain('proposal_stale_document');
+    expect(stalePreview.canAccept).toBe(false);
+  });
+});

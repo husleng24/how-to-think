@@ -14,6 +14,14 @@
   cursor: grabbing;
 }
 
+.mindmap-renderer.is-branch-dragging .mindmap-pan-surface {
+  cursor: grabbing;
+}
+
+.mindmap-renderer.is-invalid-drop .mindmap-pan-surface {
+  cursor: no-drop;
+}
+
 .mindmap-pan-surface {
   position: absolute;
   inset: 0;
@@ -52,6 +60,53 @@
 .mindmap-node {
   position: absolute;
   color: #24272a;
+}
+
+.mindmap-drop-indicator {
+  position: absolute;
+  z-index: 3;
+  pointer-events: none;
+}
+
+.mindmap-drop-indicator.is-child {
+  border: 3px solid #317682;
+  border-radius: 10px;
+  box-shadow: 0 0 0 5px rgba(49, 118, 130, 0.16);
+}
+
+.mindmap-drop-indicator.is-invalid {
+  border: 2px dashed #b45d55;
+  border-radius: 10px;
+  box-shadow: 0 0 0 4px rgba(180, 93, 85, 0.12);
+}
+
+.mindmap-drop-indicator.is-reorder {
+  height: 4px;
+  border-radius: 999px;
+  background: #317682;
+  box-shadow:
+    0 0 0 4px rgba(49, 118, 130, 0.18),
+    0 8px 18px rgba(31, 58, 62, 0.18);
+}
+
+.mindmap-drop-indicator.is-reorder::before,
+.mindmap-drop-indicator.is-reorder::after {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #317682;
+  content: "";
+  transform: translateY(-50%);
+}
+
+.mindmap-drop-indicator.is-reorder::before {
+  left: -2px;
+}
+
+.mindmap-drop-indicator.is-reorder::after {
+  right: -2px;
 }
 
 .mindmap-node-main {

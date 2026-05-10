@@ -14,16 +14,23 @@ import {
   layoutMindMapDocument,
 } from '../domain/mindMap';
 import type { MindMapCommand, MindMapEditorState, MindMapEditorStore } from '../domain/mindMap';
+import { createProposalReviewStore, ProposalReviewPanel } from '../features/ai-proposals';
+import type { ProposalReview, ProposalReviewStore } from '../features/ai-proposals';
 import { MindMapCanvas } from '../features/mindmap/MindMapCanvas';
 
 interface EditorShellProps {
   state: MindMapEditorState;
   store?: MindMapEditorStore;
+  proposalReviewStore?: ProposalReviewStore;
 }
 
 const outlineSections = ['Local Markdown', 'AI Drafts', 'Git History'];
 
-export function EditorShell({ state, store: providedStore }: EditorShellProps) {
+export function EditorShell({
+  state,
+  store: providedStore,
+  proposalReviewStore: providedProposalReviewStore,
+}: EditorShellProps) {
   const localStore = useMemo(
     () =>
       createMindMapEditorStore({
@@ -35,12 +42,39 @@ export function EditorShell({ state, store: providedStore }: EditorShellProps) {
     [state],
   );
   const store = providedStore ?? localStore;
+  const localProposalReviewStore = useMemo(() => createProposalReviewStore(), []);
+  const proposalReviewStore = providedProposalReviewStore ?? localProposalReviewStore;
   const editorState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  const proposalReviewState = useSyncExternalStore(
+    proposalReviewStore.subscribe,
+    proposalReviewStore.getState,
+    proposalReviewStore.getState,
+  );
   const dispatch = useCallback(
     (command: MindMapCommand) => {
       return store.dispatch(command);
     },
     [store],
+  );
+  const beginProposalApply = useCallback(
+    (review: ProposalReview) => {
+      proposalReviewStore.beginApply(review.reviewId);
+    },
+    [proposalReviewStore],
+  );
+  const rejectProposal = useCallback(
+    (review: ProposalReview) => {
+      void review;
+      proposalReviewStore.rejectActive();
+    },
+    [proposalReviewStore],
+  );
+  const dismissProposal = useCallback(
+    (review: ProposalReview) => {
+      void review;
+      proposalReviewStore.dismissActive();
+    },
+    [proposalReviewStore],
   );
   const { document, selection, viewport, isDirty } = editorState;
   const selectedNode = getMindMapNode(document, selection.selectedNodeId);
@@ -176,6 +210,19 @@ export function EditorShell({ state, store: providedStore }: EditorShellProps) {
               </div>
             </dl>
           </section>
+
+          <ProposalReviewPanel
+            review={proposalReviewState.activeReview}
+            onAccept={beginProposalApply}
+            onReject={rejectProposal}
+            onDismiss={dismissProposal}
+            onConfirmRiskFlag={(riskFlag, review) =>
+              proposalReviewStore.confirmRiskFlag(riskFlag, review.reviewId)
+            }
+            onClearRiskConfirmation={(riskFlag, review) =>
+              proposalReviewStore.clearRiskConfirmation(riskFlag, review.reviewId)
+            }
+          />
         </aside>
       </div>
 
