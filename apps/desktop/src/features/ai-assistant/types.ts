@@ -78,3 +78,65 @@ export interface AiConversationContextEnvelope {
   contextLabel: string;
   contextSnapshot: AiContextSnapshot;
 }
+
+export type AiProviderKind = 'codex' | 'claude' | 'generic';
+
+export type AiProviderHealthState =
+  | 'unknown'
+  | 'ok'
+  | 'missingExecutable'
+  | 'permissionDenied'
+  | 'authRequired'
+  | 'timeout'
+  | 'nonZeroExit'
+  | 'invalidConfig';
+
+export interface AiProviderHealthStatus {
+  status: AiProviderHealthState;
+  checkedAt: string;
+  message: string;
+  detail?: string;
+  exitCode?: number;
+  durationMs?: number;
+}
+
+export interface AiProviderConfig {
+  id: string;
+  displayName: string;
+  kind: AiProviderKind;
+  executablePath: string;
+  argumentTemplate: string[];
+  healthCheckArgs: string[];
+  environmentAllowlist?: string[];
+  workingDirectory?: string;
+  timeoutSeconds: number;
+  maxOutputBytes: number;
+  enabled: boolean;
+  lastHealthStatus?: AiProviderHealthStatus;
+}
+
+export interface AiProviderConfigInput {
+  id?: string;
+  displayName: string;
+  kind: AiProviderKind;
+  executablePath: string;
+  argumentTemplate: string[];
+  healthCheckArgs: string[];
+  environmentAllowlist?: string[];
+  workingDirectory?: string;
+  timeoutSeconds: number;
+  maxOutputBytes: number;
+  enabled: boolean;
+}
+
+export interface AiProviderSettings {
+  activeProviderId?: string | null;
+  providers: AiProviderConfig[];
+}
+
+export interface AiProviderSetupState {
+  usable: boolean;
+  reason: string;
+  nextAction: string;
+  activeProvider?: AiProviderConfig;
+}

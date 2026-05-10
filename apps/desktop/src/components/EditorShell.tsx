@@ -1,12 +1,11 @@
-import {
+﻿import {
   Bot,
   FilePlus2,
   FolderOpen,
   GitBranch,
   Save,
-  Search,
 } from 'lucide-react';
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import {
   createMindMapEditorStore,
@@ -14,14 +13,26 @@ import {
   layoutMindMapDocument,
 } from '../domain/mindMap';
 import type { MindMapCommand, MindMapEditorState, MindMapEditorStore } from '../domain/mindMap';
+import {
+  AiProviderSettingsPanel,
+  useAiProviderSettings,
+} from '../features/ai-assistant';
+import type { AiProviderSettingsController } from '../features/ai-assistant';
 import { createProposalReviewStore, ProposalReviewPanel } from '../features/ai-proposals';
 import type { ProposalReview, ProposalReviewStore } from '../features/ai-proposals';
 import { MindMapCanvas } from '../features/mindmap/MindMapCanvas';
+import type { WorkspaceLifecycleActions, WorkspaceLifecycleState } from '../features/workspace';
 
 interface EditorShellProps {
   state: MindMapEditorState;
   store?: MindMapEditorStore;
   proposalReviewStore?: ProposalReviewStore;
+  aiProviderController?: AiProviderSettingsController;
+  workspaceState?: WorkspaceLifecycleState;
+  workspaceActions?: WorkspaceLifecycleActions & {
+    saveActiveDocument?: () => Promise<boolean>;
+    savePromptDocument?: () => Promise<void>;
+  };
 }
 
 const outlineSections = ['Local Markdown', 'AI Drafts', 'Git History'];
@@ -30,6 +41,9 @@ export function EditorShell({
   state,
   store: providedStore,
   proposalReviewStore: providedProposalReviewStore,
+  aiProviderController: providedAiProviderController,
+  workspaceState,
+  workspaceActions,
 }: EditorShellProps) {
   const localStore = useMemo(
     () =>
@@ -44,6 +58,8 @@ export function EditorShell({
   const store = providedStore ?? localStore;
   const localProposalReviewStore = useMemo(() => createProposalReviewStore(), []);
   const proposalReviewStore = providedProposalReviewStore ?? localProposalReviewStore;
+  const localAiProviderController = useAiProviderSettings();
+  const aiProviderController = providedAiProviderController ?? localAiProviderController;
   const editorState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const proposalReviewState = useSyncExternalStore(
     proposalReviewStore.subscribe,
@@ -76,12 +92,31 @@ export function EditorShell({
     },
     [proposalReviewStore],
   );
+
   const { document, selection, viewport, isDirty } = editorState;
   const selectedNode = getMindMapNode(document, selection.selectedNodeId);
   const layout = useMemo(() => layoutMindMapDocument(document), [document]);
-  const zoomPercent = Math.round(viewport.zoom * 100);
+  const aiProviderSetupState = aiProviderController.setupState;
+  const [workspacePathInput, setWorkspacePathInput] = useState(
+    workspaceState?.workspace?.displayPath ?? '',
+  );
+  const [newMarkdownPath, setNewMarkdownPath] = useState('');
+  const [markdownPathInput, setMarkdownPathInput] = useState(
+    workspaceState?.active?.snapshot.relativePath ?? '',
+  );
   const visibleOutlineNodes = layout.nodes.slice(0, 80);
   const hiddenOutlineCount = Math.max(0, layout.nodes.length - visibleOutlineNodes.length);
+  const zoomPercent = Math.round(viewport.zoom * 100);
+  const trimmedWorkspacePath = workspacePathInput.trim();
+  const trimmedNewMarkdownPath = newMarkdownPath.trim();
+
+  useEffect(() => {
+    setWorkspacePathInput(workspaceState?.workspace?.displayPath ?? '');
+  }, [workspaceState?.workspace?.displayPath]);
+
+  useEffect(() => {
+    setMarkdownPathInput(workspaceState?.active?.snapshot.relativePath ?? '');
+  }, [workspaceState?.active?.snapshot.relativePath]);
 
   return (
     <div className="app-root">
@@ -97,17 +132,42 @@ export function EditorShell({
         </div>
 
         <div className="command-bar" aria-label="Document actions">
-          <button className="icon-button" type="button" aria-label="New mind map" title="New mind map">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="New mind map"
+            title="New mind map"
+            disabled={!workspaceState?.workspace}
+          >
             <FilePlus2 size={18} />
           </button>
-          <button className="icon-button" type="button" aria-label="Open Markdown" title="Open Markdown">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Open Markdown"
+            title="Open Markdown"
+            disabled={!workspaceState?.workspace}
+          >
             <FolderOpen size={18} />
           </button>
-          <button className="icon-button" type="button" aria-label="Save Markdown" title="Save Markdown">
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Save Markdown"
+            title="Save Markdown"
+            disabled={!workspaceState?.active}
+            onClick={() => void workspaceActions?.saveActiveDocument?.()}
+          >
             <Save size={18} />
           </button>
           <span className="toolbar-divider" aria-hidden="true" />
-          <button className="text-button" type="button">
+          <button
+            className="text-button"
+            type="button"
+            aria-label={aiProviderSetupState.usable ? 'AI' : 'AI unavailable'}
+            disabled={!aiProviderSetupState.usable}
+            title={aiProviderSetupState.nextAction}
+          >
             <Bot size={17} />
             AI
           </button>
@@ -122,10 +182,77 @@ export function EditorShell({
         <aside className="side-panel outline-panel" aria-label="Document outline">
           <div className="panel-heading">
             <p className="panel-kicker">Outline</p>
-            <button className="icon-button compact" type="button" aria-label="Search outline" title="Search outline">
-              <Search size={16} />
+          </div>
+
+          <label className="workspace-path-field">
+            <span>Workspace path</span>
+            <input
+              value={workspacePathInput}
+              placeholder="No workspace selected"
+              onChange={(event) => setWorkspacePathInput(event.target.value)}
+            />
+          </label>
+
+          <div className="workspace-action-row">
+            <button
+              className="text-button"
+              type="button"
+              disabled={!trimmedWorkspacePath || workspaceState?.isBusy}
+              onClick={() => void workspaceActions?.openWorkspace(trimmedWorkspacePath)}
+            >
+              Open workspace
+            </button>
+            <button
+              className="text-button"
+              type="button"
+              disabled={!trimmedWorkspacePath || workspaceState?.isBusy}
+              onClick={() => void workspaceActions?.createWorkspace(trimmedWorkspacePath)}
+            >
+              Create workspace
             </button>
           </div>
+
+          {workspaceState?.workspace ? (
+            <section className="workspace-file-tools" aria-label="Workspace files">
+              <p className="panel-kicker">{workspaceState.workspace.displayName}</p>
+              <label className="workspace-path-field">
+                <span>New Markdown path</span>
+                <input
+                  value={newMarkdownPath}
+                  placeholder="ideas.md"
+                  onChange={(event) => setNewMarkdownPath(event.target.value)}
+                />
+              </label>
+              <button
+                className="text-button"
+                type="button"
+                disabled={!trimmedNewMarkdownPath || workspaceState.isBusy}
+                onClick={() => {
+                  void workspaceActions?.requestCreateFile(trimmedNewMarkdownPath);
+                  setNewMarkdownPath('');
+                }}
+              >
+                Create Markdown file
+              </button>
+
+              {workspaceState.files.length > 0 ? (
+                <div className="workspace-file-list">
+                  {workspaceState.files.map((file) => (
+                    <button
+                      className="outline-section"
+                      type="button"
+                      key={file.relativePath}
+                      onClick={() => void workspaceActions?.requestOpenFile(file.relativePath)}
+                    >
+                      {file.relativePath}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <p>No Markdown files yet.</p>
+              )}
+            </section>
+          ) : null}
 
           <nav className="outline-tree" aria-label="Mind map nodes">
             {visibleOutlineNodes.map((layoutNode) => (
@@ -170,9 +297,9 @@ export function EditorShell({
 
           <section className="inspector-section">
             <p className="field-label">Selected node</p>
-            <h2>{selectedNode.text}</h2>
+            <p className="selected-node-title">{selectedNode.text}</p>
             <p>
-              {selectedNode.collapsed ? 'Collapsed branch' : 'Expanded branch'} ·{' '}
+              {selectedNode.collapsed ? 'Collapsed branch' : 'Expanded branch'} -{' '}
               {selectedNode.childIds.length === 1
                 ? '1 child'
                 : `${selectedNode.childIds.length} children`}
@@ -211,6 +338,39 @@ export function EditorShell({
             </dl>
           </section>
 
+          {workspaceState?.active ? (
+            <section className="inspector-section">
+              <p className="field-label">File actions</p>
+              <label className="workspace-path-field">
+                <span>Markdown path</span>
+                <input
+                  value={markdownPathInput}
+                  onChange={(event) => setMarkdownPathInput(event.target.value)}
+                />
+              </label>
+              <div className="workspace-action-row">
+                <button
+                  className="text-button inspector-action"
+                  type="button"
+                  disabled={!markdownPathInput.trim() || workspaceState.isBusy}
+                  onClick={() => void workspaceActions?.requestRenameActive(markdownPathInput)}
+                >
+                  Rename file
+                </button>
+                <button
+                  className="text-button inspector-action"
+                  type="button"
+                  disabled={workspaceState.isBusy}
+                  onClick={() => void workspaceActions?.requestDeleteActive()}
+                >
+                  Delete file
+                </button>
+              </div>
+            </section>
+          ) : null}
+
+          <AiProviderSettingsPanel controller={aiProviderController} />
+
           <ProposalReviewPanel
             review={proposalReviewState.activeReview}
             onAccept={beginProposalApply}
@@ -227,10 +387,43 @@ export function EditorShell({
       </div>
 
       <footer className="status-bar">
-        <span>{isDirty ? 'Unsaved changes' : 'Markdown ready'}</span>
+        <span>{workspaceState?.saveStatus.message ?? (isDirty ? 'Unsaved changes' : 'Markdown ready')}</span>
         <span>{layout.visibleNodeIds.length} visible nodes</span>
         <span>{zoomPercent}% zoom</span>
       </footer>
+
+      {workspaceState?.prompt ? (
+        <div className="modal-backdrop">
+          <div role="dialog" aria-label={workspaceState.prompt.title} className="modal-panel">
+            <h2>{workspaceState.prompt.title}</h2>
+            <p>{workspaceState.prompt.message}</p>
+            <div className="workspace-action-row">
+              <button
+                className="text-button"
+                type="button"
+                disabled={workspaceState.prompt.saveDisabled}
+                onClick={() => void workspaceActions?.savePromptDocument?.()}
+              >
+                Save
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => void workspaceActions?.discardPrompt()}
+              >
+                Discard
+              </button>
+              <button
+                className="text-button"
+                type="button"
+                onClick={() => workspaceActions?.cancelPrompt()}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

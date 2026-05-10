@@ -117,6 +117,18 @@ button {
   color: #255e67;
 }
 
+.icon-button:disabled,
+.text-button:disabled {
+  border-color: #d8d0c3;
+  background: #f1ece4;
+  color: #9b9286;
+}
+
+.icon-button.danger:hover {
+  border-color: #bd6b5e;
+  color: #8a2d24;
+}
+
 .icon-button.compact {
   min-width: 32px;
   height: 32px;
@@ -133,6 +145,42 @@ button {
   height: 28px;
   margin: 0 2px;
   background: #d9d2c4;
+}
+
+.save-status {
+  display: inline-flex;
+  max-width: 260px;
+  min-height: 32px;
+  align-items: center;
+  gap: 7px;
+  overflow: hidden;
+  padding: 0 10px;
+  border: 1px solid #c8c0b3;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #4e4a45;
+  font-size: 0.78rem;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.save-status.saved {
+  border-color: #6c9a7c;
+  color: #24573a;
+}
+
+.save-status.unsaved,
+.save-status.saving {
+  border-color: #c89257;
+  color: #7c4b18;
+}
+
+.save-status.saveFailed,
+.save-status.conflict,
+.save-status.missing {
+  border-color: #bd6b5e;
+  color: #8a2d24;
 }
 
 .workspace-grid {
@@ -162,6 +210,129 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.workspace-panel {
+  display: grid;
+  gap: 12px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid #dfd7ca;
+}
+
+.workspace-panel + .workspace-panel,
+.outline-heading {
+  margin-top: 18px;
+}
+
+.workspace-form {
+  display: grid;
+  gap: 10px;
+}
+
+.workspace-form label {
+  color: #6a6259;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.workspace-form input {
+  width: 100%;
+  min-width: 0;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid #ccc4b5;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #202225;
+}
+
+.workspace-form input:focus {
+  border-color: #317682;
+  outline: 2px solid rgba(49, 118, 130, 0.22);
+}
+
+.compact-form {
+  gap: 7px;
+}
+
+.form-actions,
+.file-action-row,
+.inline-form-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.form-actions {
+  flex-wrap: wrap;
+}
+
+.inline-form-row input {
+  flex: 1 1 auto;
+}
+
+.workspace-summary {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.workspace-summary strong,
+.workspace-summary span {
+  overflow-wrap: anywhere;
+}
+
+.workspace-summary span,
+.empty-state {
+  color: #6a6259;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.file-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.file-list-item {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  min-height: 36px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #393a3b;
+  text-align: left;
+}
+
+.file-list-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-list-item.active {
+  border-color: #9ab4b8;
+  background: #eef6f4;
+  color: #174e55;
+  font-weight: 800;
+}
+
+.file-list-item:hover {
+  background: #f0ebe2;
+}
+
+.file-action-row {
+  flex-wrap: wrap;
 }
 
 .outline-tree,
@@ -705,6 +876,69 @@ button {
   background: #202225;
   color: #f6efe3;
   font-size: 0.78rem;
+}
+
+.toast {
+  position: fixed;
+  z-index: 5;
+  right: 18px;
+  bottom: 48px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 320px) 32px;
+  align-items: start;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #bd6b5e;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #7c2e27;
+  box-shadow: 0 14px 32px rgba(44, 38, 30, 0.16);
+}
+
+.toast p {
+  margin: 4px 0 0;
+  color: #4e4a45;
+  line-height: 1.35;
+}
+
+.modal-backdrop {
+  position: fixed;
+  z-index: 6;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(32, 34, 37, 0.46);
+}
+
+.prompt-dialog {
+  display: grid;
+  width: min(440px, 100%);
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid #cfc4b4;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 18px 40px rgba(20, 18, 15, 0.22);
+}
+
+.prompt-dialog h2 {
+  margin: 0;
+  color: #202225;
+  font-size: 1rem;
+}
+
+.prompt-dialog p {
+  margin: 0;
+  color: #4e4a45;
+  line-height: 1.45;
+}
+
+.prompt-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 @media (max-width: 1080px) {

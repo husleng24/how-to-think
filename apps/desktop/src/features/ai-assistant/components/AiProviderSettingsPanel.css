@@ -1,0 +1,186 @@
+.ai-provider-panel {
+  display: grid;
+  gap: 12px;
+  padding: 18px 0;
+  border-top: 1px solid #dfd7ca;
+}
+
+.ai-provider-heading,
+.ai-provider-form-toolbar,
+.ai-provider-row,
+.ai-provider-select,
+.ai-provider-toggle {
+  display: flex;
+  align-items: center;
+}
+
+.ai-provider-heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ai-provider-heading h2 {
+  margin: 6px 0 0;
+  color: #202225;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+
+.ai-provider-readiness {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: 1px solid #bd6b5e;
+  border-radius: 999px;
+  color: #8a2d24;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ai-provider-readiness.ready {
+  border-color: #6c9a7c;
+  color: #24573a;
+}
+
+.ai-provider-next-action,
+.ai-provider-health,
+.ai-provider-error,
+.ai-provider-empty {
+  margin: 0;
+  color: #55504a;
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.ai-provider-next-action,
+.ai-provider-health {
+  display: grid;
+  gap: 3px;
+}
+
+.ai-provider-next-action strong,
+.ai-provider-health strong {
+  color: #202225;
+}
+
+.ai-provider-list,
+.ai-provider-form {
+  display: grid;
+  gap: 8px;
+}
+
+.ai-provider-row {
+  min-width: 0;
+  gap: 6px;
+}
+
+.ai-provider-row.selected .ai-provider-select {
+  border-color: #9ab4b8;
+  background: #eef6f4;
+}
+
+.ai-provider-select {
+  min-width: 0;
+  min-height: 44px;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  gap: 8px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #2f3334;
+  text-align: left;
+}
+
+.ai-provider-select span {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.ai-provider-select strong,
+.ai-provider-select small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-provider-select small {
+  color: #6a6259;
+  font-size: 0.76rem;
+}
+
+.ai-provider-form-toolbar {
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.ai-provider-form-toolbar .text-button {
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  font-size: 0.82rem;
+}
+
+.ai-provider-field {
+  display: grid;
+  gap: 5px;
+}
+
+.ai-provider-field span,
+.ai-provider-toggle span {
+  color: #6a6259;
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.ai-provider-field input,
+.ai-provider-field select,
+.ai-provider-field textarea {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid #ccc4b5;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #202225;
+  font: inherit;
+  font-size: 0.84rem;
+}
+
+.ai-provider-field input,
+.ai-provider-field select {
+  height: 34px;
+  padding: 0 9px;
+}
+
+.ai-provider-field textarea {
+  resize: vertical;
+  padding: 8px 9px;
+  line-height: 1.35;
+}
+
+.ai-provider-number-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.ai-provider-toggle {
+  gap: 8px;
+}
+
+.ai-provider-health.ok,
+.ai-provider-health.ready {
+  color: #24573a;
+}
+
+.ai-provider-health.missingExecutable,
+.ai-provider-health.permissionDenied,
+.ai-provider-health.authRequired,
+.ai-provider-health.timeout,
+.ai-provider-health.nonZeroExit,
+.ai-provider-health.invalidConfig,
+.ai-provider-error {
+  color: #8a2d24;
+}

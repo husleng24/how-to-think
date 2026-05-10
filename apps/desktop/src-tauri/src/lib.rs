@@ -43,6 +43,11 @@ pub fn run() {
             commands::save_markdown_document,
             commands::rename_markdown_document,
             commands::delete_markdown_document,
+            ai::providers::list_ai_providers,
+            ai::providers::save_ai_provider,
+            ai::providers::select_ai_provider,
+            ai::providers::remove_ai_provider,
+            ai::providers::check_ai_provider_health,
         ])
         .run(tauri::generate_context!())
         .expect("error while running How to Think desktop shell");
