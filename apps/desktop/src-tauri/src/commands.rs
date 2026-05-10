@@ -1,8 +1,10 @@
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
+use crate::fs_watch::{self, WorkspaceWatchState};
 use crate::models::{
-    DeleteDocumentResult, DocumentSnapshot, FileVersion, Platform, RenameDocumentResult,
-    SaveRequest, SaveResult, WorkspaceFile, WorkspaceRecord, WorkspaceSession,
+    DeleteDocumentResult, DocumentExternalChangeStatus, DocumentSnapshot, ExternalChangeBatch,
+    FileVersion, Platform, RenameDocumentResult, SaveRequest, SaveResult, WorkspaceFile,
+    WorkspaceRecord, WorkspaceSession,
 };
 use crate::path_guard;
 use crate::settings::SettingsStore;
@@ -84,6 +86,44 @@ pub fn refresh_workspace_files(
     workspace_id: String,
 ) -> Result<Vec<WorkspaceFile>, WorkspaceError> {
     list_workspace_files(app, workspace_id)
+}
+
+#[tauri::command]
+pub fn start_workspace_change_detection(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<ExternalChangeBatch, WorkspaceError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::WatchWorkspace)?;
+    app.state::<WorkspaceWatchState>()
+        .start(app.clone(), record)
+}
+
+#[tauri::command]
+pub fn refresh_workspace_external_changes(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<ExternalChangeBatch, WorkspaceError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::WatchWorkspace)?;
+    app.state::<WorkspaceWatchState>().refresh(record)
+}
+
+#[tauri::command]
+pub fn stop_workspace_change_detection(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<(), WorkspaceError> {
+    app.state::<WorkspaceWatchState>().stop(&workspace_id)
+}
+
+#[tauri::command]
+pub fn check_open_document_external_change(
+    app: AppHandle,
+    workspace_id: String,
+    relative_path: String,
+    expected_version: FileVersion,
+) -> Result<DocumentExternalChangeStatus, WorkspaceError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::WatchWorkspace)?;
+    fs_watch::document_external_change_status(&record, &relative_path, &expected_version)
 }
 
 #[tauri::command]

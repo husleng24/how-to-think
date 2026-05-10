@@ -134,3 +134,74 @@ pub struct DeleteDocumentResult {
     pub files: Vec<WorkspaceFile>,
     pub deleted_at: IsoDateTime,
 }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalChangeSource {
+    Watcher,
+    Refresh,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum ExternalChangeKind {
+    Created,
+    Modified,
+    Deleted,
+    Renamed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalChangeEvent {
+    pub workspace_id: WorkspaceId,
+    pub kind: ExternalChangeKind,
+    pub relative_path: WorkspaceRelativePath,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_relative_path: Option<WorkspaceRelativePath>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<WorkspaceFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_version: Option<FileVersion>,
+    pub source: ExternalChangeSource,
+    pub detected_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExternalChangeBatch {
+    pub workspace_id: WorkspaceId,
+    pub source: ExternalChangeSource,
+    pub events: Vec<ExternalChangeEvent>,
+    pub files: Vec<WorkspaceFile>,
+    pub detected_at: IsoDateTime,
+    pub watcher_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub watch_error: Option<crate::errors::WorkspaceError>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DocumentExternalChangeType {
+    Unchanged,
+    Modified,
+    Missing,
+    Moved,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentExternalChangeStatus {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub change_type: DocumentExternalChangeType,
+    pub expected_version: FileVersion,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_file: Option<WorkspaceFile>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moved_to: Option<WorkspaceRelativePath>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub moved_file: Option<WorkspaceFile>,
+    pub files: Vec<WorkspaceFile>,
+    pub checked_at: IsoDateTime,
+}

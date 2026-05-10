@@ -9,7 +9,8 @@ describe('App shell', () => {
     const editor = screen.getByRole('main', { name: /mind map editor/i });
 
     expect(editor).toBeInTheDocument();
-    expect(within(editor).getByRole('heading', { name: 'Untitled thought' })).toBeVisible();
+    expect(within(editor).getByRole('button', { name: 'Untitled thought' })).toBeVisible();
+    expect(within(editor).getByRole('button', { name: /fit to content/i })).toBeEnabled();
     expect(screen.getByRole('button', { name: /open markdown/i })).toBeEnabled();
     expect(screen.getByText('Local Markdown')).toBeVisible();
   });

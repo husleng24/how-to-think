@@ -60,3 +60,8 @@ Run from the repository root when Rust is available:
 cargo test --manifest-path crates/markdown/Cargo.toml
 cargo fmt --manifest-path crates/markdown/Cargo.toml -- --check
 ```
+
+The shared compatibility corpus lives in `tests/fixtures/compat`, with exact tree
+and link snapshots under `tests/fixtures/compat/expected`. See
+`docs/markdown-compat-validation.md` for the targeted regression commands and
+manual Markmap/Obsidian-style validation steps.

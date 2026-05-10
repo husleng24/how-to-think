@@ -1,0 +1,243 @@
+.mindmap-renderer {
+  position: relative;
+  height: 100%;
+  min-height: 516px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, rgba(80, 82, 77, 0.18) 1px, transparent 0),
+    #f4f1eb;
+  background-size: 28px 28px;
+  touch-action: none;
+}
+
+.mindmap-renderer.is-panning {
+  cursor: grabbing;
+}
+
+.mindmap-pan-surface {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  cursor: grab;
+}
+
+.mindmap-content {
+  position: absolute;
+  left: 0;
+  top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+
+.mindmap-edges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.mindmap-edge {
+  fill: none;
+  stroke: #86939a;
+  stroke-linecap: round;
+  stroke-width: 2.5;
+}
+
+.mindmap-edge.is-root-edge {
+  stroke: #317682;
+  stroke-width: 3.5;
+}
+
+.mindmap-node {
+  position: absolute;
+  color: #24272a;
+}
+
+.mindmap-node-main {
+  display: grid;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  padding: 15px 17px;
+  border: 1px solid #c8bba9;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 12px 28px rgba(44, 38, 30, 0.1);
+  color: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+.mindmap-node-main:hover {
+  border-color: #317682;
+}
+
+.mindmap-node-main:focus-visible {
+  outline: 3px solid rgba(49, 118, 130, 0.28);
+  outline-offset: 2px;
+}
+
+.mindmap-node.is-root .mindmap-node-main {
+  border-color: #245f68;
+  background: #fdfaf3;
+}
+
+.mindmap-node.is-selected .mindmap-node-main {
+  border-color: #245f68;
+  box-shadow:
+    0 0 0 3px rgba(49, 118, 130, 0.22),
+    0 14px 32px rgba(31, 58, 62, 0.16);
+}
+
+.mindmap-node.is-focused .mindmap-node-main {
+  outline: 2px solid #c1734a;
+  outline-offset: 3px;
+}
+
+.mindmap-node-kicker {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #6a6259;
+  font-size: 0.71rem;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.mindmap-node-depth {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mindmap-node-count {
+  flex: 0 0 auto;
+  color: #317682;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.mindmap-node-text {
+  display: -webkit-box;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+  color: #24272a;
+  font-size: 0.98rem;
+  font-weight: 760;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.mindmap-node.is-root .mindmap-node-text {
+  font-size: 1.32rem;
+  line-height: 1.2;
+}
+
+.mindmap-node.is-empty .mindmap-node-text {
+  color: #8a8177;
+  font-style: italic;
+  font-weight: 650;
+}
+
+.mindmap-node-toggle {
+  position: absolute;
+  right: -14px;
+  bottom: -14px;
+  display: inline-flex;
+  width: 34px;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #c8bba9;
+  border-radius: 999px;
+  background: #fffdf8;
+  color: #255e67;
+  cursor: pointer;
+  box-shadow: 0 8px 20px rgba(44, 38, 30, 0.12);
+}
+
+.mindmap-node-toggle:hover {
+  border-color: #317682;
+}
+
+.mindmap-hidden-count {
+  position: absolute;
+  right: -9px;
+  top: -9px;
+  display: inline-flex;
+  min-width: 22px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #c1734a;
+  color: #fffdf8;
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.mindmap-controls {
+  position: absolute;
+  z-index: 4;
+  top: 16px;
+  right: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid #d1c8b7;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 10px 22px rgba(44, 38, 30, 0.08);
+}
+
+.mindmap-zoom-level {
+  display: inline-flex;
+  min-width: 52px;
+  justify-content: center;
+  color: #5b564f;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.mindmap-control-button {
+  display: inline-flex;
+  width: 32px;
+  height: 32px;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: #2e3334;
+  cursor: pointer;
+}
+
+.mindmap-control-button:hover {
+  border-color: #9ab4b8;
+  color: #255e67;
+}
+
+.mindmap-control-button:focus-visible {
+  outline: 2px solid rgba(49, 118, 130, 0.32);
+  outline-offset: 2px;
+}
+
+.mindmap-empty-state {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  margin: 0;
+  color: #6a6259;
+  transform: translate(-50%, -50%);
+}

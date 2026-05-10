@@ -1,0 +1,3 @@
+0|heading|Long Form Plan
+1|heading|This deliberately long node title keeps enough words to exercise serializer line handling without wrapping or truncating important planning context
+2|heading|Follow up branch with compact text

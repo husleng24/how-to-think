@@ -5,28 +5,49 @@ import {
   GitBranch,
   Save,
   Search,
-  ZoomIn,
-  ZoomOut,
 } from 'lucide-react';
+import { useCallback, useMemo, useSyncExternalStore } from 'react';
 
 import {
+  createMindMapEditorStore,
   getMindMapNode,
-  listChildNodes,
+  layoutMindMapDocument,
 } from '../domain/mindMap';
-import type { MindMapEditorState } from '../domain/mindMap';
+import type { MindMapCommand, MindMapEditorState, MindMapEditorStore } from '../domain/mindMap';
+import { MindMapCanvas } from '../features/mindmap/MindMapCanvas';
 
 interface EditorShellProps {
   state: MindMapEditorState;
+  store?: MindMapEditorStore;
 }
 
 const outlineSections = ['Local Markdown', 'AI Drafts', 'Git History'];
 
-export function EditorShell({ state }: EditorShellProps) {
-  const { document, selection, viewport, isDirty } = state;
-  const rootNode = getMindMapNode(document, document.rootNodeId);
+export function EditorShell({ state, store: providedStore }: EditorShellProps) {
+  const localStore = useMemo(
+    () =>
+      createMindMapEditorStore({
+        document: state.document,
+        selection: state.selection,
+        viewport: state.viewport,
+        historyLimit: state.history.limit,
+      }),
+    [state],
+  );
+  const store = providedStore ?? localStore;
+  const editorState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
+  const dispatch = useCallback(
+    (command: MindMapCommand) => {
+      store.dispatch(command);
+    },
+    [store],
+  );
+  const { document, selection, viewport, isDirty } = editorState;
   const selectedNode = getMindMapNode(document, selection.selectedNodeId);
-  const childNodes = listChildNodes(document, rootNode.id);
+  const layout = useMemo(() => layoutMindMapDocument(document), [document]);
   const zoomPercent = Math.round(viewport.zoom * 100);
+  const visibleOutlineNodes = layout.nodes.slice(0, 80);
+  const hiddenOutlineCount = Math.max(0, layout.nodes.length - visibleOutlineNodes.length);
 
   return (
     <div className="app-root">
@@ -73,16 +94,21 @@ export function EditorShell({ state }: EditorShellProps) {
           </div>
 
           <nav className="outline-tree" aria-label="Mind map nodes">
-            <button className="outline-node active" type="button">
-              <span className="node-dot" aria-hidden="true" />
-              {rootNode.text}
-            </button>
-            {childNodes.map((node) => (
-              <button className="outline-node child" type="button" key={node.id}>
-                <span className="node-dot muted" aria-hidden="true" />
-                {node.text}
+            {visibleOutlineNodes.map((layoutNode) => (
+              <button
+                className={`outline-node${selection.selectedNodeId === layoutNode.id ? ' active' : ''}`}
+                style={{ paddingLeft: 10 + Math.min(layoutNode.depth, 5) * 14 }}
+                type="button"
+                key={layoutNode.id}
+                onClick={() => dispatch({ type: 'select-node', nodeId: layoutNode.id })}
+              >
+                <span className={`node-dot${layoutNode.isRoot ? '' : ' muted'}`} aria-hidden="true" />
+                {layoutNode.node.text.trim() || 'Empty thought'}
               </button>
             ))}
+            {hiddenOutlineCount > 0 ? (
+              <span className="outline-overflow">+{hiddenOutlineCount} more visible nodes</span>
+            ) : null}
           </nav>
 
           <div className="outline-sections" aria-label="Work areas">
@@ -95,44 +121,7 @@ export function EditorShell({ state }: EditorShellProps) {
         </aside>
 
         <main className="canvas-region" aria-label="Mind map editor">
-          <div className="canvas-toolbar" aria-label="Canvas controls">
-            <button className="icon-button compact" type="button" aria-label="Zoom out" title="Zoom out">
-              <ZoomOut size={16} />
-            </button>
-            <span className="zoom-level">{zoomPercent}%</span>
-            <button className="icon-button compact" type="button" aria-label="Zoom in" title="Zoom in">
-              <ZoomIn size={16} />
-            </button>
-          </div>
-
-          <section className="mindmap-canvas" aria-label="Editable mind map canvas">
-            <div className="root-node">
-              <p className="node-label">Root</p>
-              <h2>{rootNode.text}</h2>
-              <p>Start from a Markdown heading or outline branch.</p>
-            </div>
-
-            <div className="branch-rail" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-
-            <div className="branch-grid" aria-label="Starting branches">
-              <article className="branch-node markdown">
-                <p>Markdown source</p>
-                <strong># Untitled thought</strong>
-              </article>
-              <article className="branch-node ai">
-                <p>AI working set</p>
-                <strong>No draft selected</strong>
-              </article>
-              <article className="branch-node git">
-                <p>Git checkpoint</p>
-                <strong>Uncommitted map</strong>
-              </article>
-            </div>
-          </section>
+          <MindMapCanvas state={editorState} onCommand={dispatch} />
         </main>
 
         <aside className="side-panel inspector-panel" aria-label="Node inspector">
@@ -143,7 +132,26 @@ export function EditorShell({ state }: EditorShellProps) {
           <section className="inspector-section">
             <p className="field-label">Selected node</p>
             <h2>{selectedNode.text}</h2>
-            <p>{selectedNode.collapsed ? 'Collapsed branch' : 'Expanded branch'}</p>
+            <p>
+              {selectedNode.collapsed ? 'Collapsed branch' : 'Expanded branch'} ·{' '}
+              {selectedNode.childIds.length === 1
+                ? '1 child'
+                : `${selectedNode.childIds.length} children`}
+            </p>
+            {selectedNode.childIds.length > 0 ? (
+              <button
+                className="text-button inspector-action"
+                type="button"
+                onClick={() =>
+                  dispatch({
+                    type: selectedNode.collapsed ? 'expand-node' : 'collapse-node',
+                    nodeId: selectedNode.id,
+                  })
+                }
+              >
+                {selectedNode.collapsed ? 'Expand branch' : 'Collapse branch'}
+              </button>
+            ) : null}
           </section>
 
           <section className="inspector-section">
@@ -168,8 +176,8 @@ export function EditorShell({ state }: EditorShellProps) {
 
       <footer className="status-bar">
         <span>{isDirty ? 'Unsaved changes' : 'Markdown ready'}</span>
-        <span>AI idle</span>
-        <span>Git detached</span>
+        <span>{layout.visibleNodeIds.length} visible nodes</span>
+        <span>{zoomPercent}% zoom</span>
       </footer>
     </div>
   );

@@ -3,6 +3,7 @@ pub mod commands;
 pub mod documents;
 pub mod errors;
 pub mod file_index;
+pub mod fs_watch;
 pub mod models;
 pub mod path_guard;
 pub mod settings;
@@ -12,6 +13,7 @@ pub mod workspace;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(fs_watch::WorkspaceWatchState::default())
         .invoke_handler(tauri::generate_handler![
             commands::load_remembered_workspace,
             commands::select_workspace_at_path,
@@ -19,6 +21,10 @@ pub fn run() {
             commands::create_workspace_at_path,
             commands::list_workspace_files,
             commands::refresh_workspace_files,
+            commands::start_workspace_change_detection,
+            commands::refresh_workspace_external_changes,
+            commands::stop_workspace_change_detection,
+            commands::check_open_document_external_change,
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
             commands::create_markdown_document,
