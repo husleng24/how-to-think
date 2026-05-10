@@ -6,6 +6,7 @@ pub mod errors;
 pub mod file_index;
 pub mod fs_watch;
 pub mod links;
+pub mod markdown_lifecycle;
 pub mod models;
 pub mod path_guard;
 pub mod settings;
@@ -30,6 +31,10 @@ pub fn run() {
             commands::refresh_workspace_external_changes,
             commands::stop_workspace_change_detection,
             commands::check_open_document_external_change,
+            commands::parse_markdown_preview,
+            commands::open_markdown_mind_map,
+            commands::serialize_mind_map,
+            commands::save_markdown_mind_map,
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
             commands::create_markdown_document,

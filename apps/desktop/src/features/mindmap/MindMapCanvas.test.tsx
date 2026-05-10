@@ -3,6 +3,7 @@ import { useCallback, useSyncExternalStore } from 'react';
 
 import {
   createMindMapEditorStore,
+  createSequentialNodeIdGenerator,
 } from './domain/mindMap';
 import {
   getMindMapCommandAvailability,
@@ -11,6 +12,7 @@ import {
 } from './interaction';
 import { getMindMapLayoutNode, layoutMindMapDocument } from './layout';
 import { MindMapCanvas } from './MindMapCanvas';
+import { createMindMapFixtureDocument, type MindMapFixtureKind } from './testFixtures';
 import type { MindMapCommand, MindMapCommandResult, MindMapEditorStore } from './domain/mindMap';
 import type { MindMapLayoutNode, MindMapLayoutResult } from './layout';
 
@@ -35,6 +37,19 @@ function createSeedStore(): MindMapEditorStore {
   expectOk(store.dispatch({ type: 'select-node', nodeId: 'root' }));
 
   return store;
+}
+
+function createFixtureStore(kind: MindMapFixtureKind): MindMapEditorStore {
+  const document = createMindMapFixtureDocument(kind, { now: fixedDate });
+
+  return createMindMapEditorStore({
+    document,
+    selection: {
+      selectedNodeId: document.rootNodeId,
+      focusedNodeId: document.rootNodeId,
+    },
+    clock: () => fixedDate,
+  });
 }
 
 function StoreBackedCanvas({ store }: { store: MindMapEditorStore }) {
@@ -244,6 +259,26 @@ describe('MindMapCanvas', () => {
     expect(screen.getAllByTestId('mindmap-edge')).toHaveLength(3);
   });
 
+  it.each([
+    ['balanced', 8],
+    ['wide', 40],
+    ['long-text', 3],
+    ['empty-text', 3],
+    ['collapsed', 2],
+    ['large-500', 499],
+  ] satisfies Array<[MindMapFixtureKind, number]>)(
+    'renders the %s fixture through the browser-mode canvas without blank output',
+    (kind, expectedVisibleEdges) => {
+      const store = createFixtureStore(kind);
+      const { container } = render(<StoreBackedCanvas store={store} />);
+      const document = store.getState().document;
+
+      expect(container.querySelector('.mindmap-content')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: document.title })).toBeVisible();
+      expect(screen.getAllByTestId('mindmap-edge')).toHaveLength(expectedVisibleEdges);
+    },
+  );
+
   it('updates selection and collapse state without deleting descendants', () => {
     const store = createSeedStore();
 
@@ -261,6 +296,30 @@ describe('MindMapCanvas', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand Alpha' }));
     expect(screen.getByRole('button', { name: 'Alpha detail' })).toBeVisible();
     expect(screen.getAllByTestId('mindmap-edge')).toHaveLength(3);
+  });
+
+  it('exposes keyboard focus and disabled command states through the rendered controls', () => {
+    const store = createSeedStore();
+    const { container } = render(<StoreBackedCanvas store={store} />);
+    const surface = getSurface(container);
+
+    surface.focus();
+    expect(surface).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Add child node' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Add sibling node' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Delete selected branch' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
+
+    const alpha = screen.getByRole('button', { name: 'Alpha' });
+    alpha.focus();
+    expect(alpha).toHaveFocus();
+    expect(store.getState().selection.focusedNodeId).toBe('a');
+    fireEvent.click(alpha);
+
+    expect(screen.getByRole('button', { name: 'Add sibling node' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Delete selected branch' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Collapse selected branch' })).toBeEnabled();
   });
 
   it('drags a branch onto a new parent and preserves descendants', () => {
@@ -444,6 +503,67 @@ describe('MindMapCanvas', () => {
 
     fireEvent.keyDown(surface, { key: 'ArrowDown' });
     expect(store.getState().selection.selectedNodeId).toBe('b');
+  });
+
+  it('supports keyboard-only creation, editing, collapse, move, delete, undo, and redo', () => {
+    const store = createMindMapEditorStore({
+      now: fixedDate,
+      rootText: 'Keyboard root',
+      generateId: createSequentialNodeIdGenerator('kbd'),
+      clock: () => fixedDate,
+    });
+    const { container } = render(<StoreBackedCanvas store={store} />);
+    const surface = getSurface(container);
+
+    surface.focus();
+    expect(surface).toHaveFocus();
+
+    fireEvent.keyDown(surface, { key: 'Tab' });
+    let editor = screen.getByRole('textbox', { name: 'Rename New thought' });
+    fireEvent.change(editor, { target: { value: 'Keyboard parent' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(store.getState().selection.selectedNodeId).toBe('kbd-1');
+
+    fireEvent.keyDown(surface, { key: 'F2' });
+    editor = screen.getByRole('textbox', { name: 'Rename Keyboard parent' });
+    fireEvent.change(editor, { target: { value: 'Keyboard branch' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(screen.getByRole('button', { name: 'Keyboard branch' })).toBeVisible();
+
+    fireEvent.keyDown(surface, { key: 'Tab' });
+    editor = screen.getByRole('textbox', { name: 'Rename New thought' });
+    fireEvent.change(editor, { target: { value: 'Keyboard child' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(store.getState().document.nodes['kbd-1'].childIds).toEqual(['kbd-2']);
+
+    fireEvent.keyDown(surface, { key: 'Tab', shiftKey: true });
+    expect(store.getState().selection.selectedNodeId).toBe('kbd-1');
+
+    fireEvent.keyDown(surface, { key: ' ' });
+    expect(store.getState().document.nodes['kbd-1'].collapsed).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Keyboard child' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(surface, { key: ' ' });
+    expect(store.getState().document.nodes['kbd-1'].collapsed).toBe(false);
+    expect(screen.getByRole('button', { name: 'Keyboard child' })).toBeVisible();
+
+    fireEvent.keyDown(surface, { key: 'Enter' });
+    editor = screen.getByRole('textbox', { name: 'Rename New thought' });
+    fireEvent.change(editor, { target: { value: 'Keyboard sibling' } });
+    fireEvent.keyDown(editor, { key: 'Enter' });
+    expect(store.getState().document.nodes.root.childIds).toEqual(['kbd-1', 'kbd-3']);
+
+    fireEvent.keyDown(surface, { key: 'ArrowUp', altKey: true });
+    expect(store.getState().document.nodes.root.childIds).toEqual(['kbd-3', 'kbd-1']);
+
+    fireEvent.keyDown(surface, { key: 'Delete' });
+    expect(screen.queryByRole('button', { name: 'Keyboard sibling' })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(surface, { key: 'z', ctrlKey: true });
+    expect(screen.getByRole('button', { name: 'Keyboard sibling' })).toBeVisible();
+
+    fireEvent.keyDown(surface, { key: 'y', ctrlKey: true });
+    expect(screen.queryByRole('button', { name: 'Keyboard sibling' })).not.toBeInTheDocument();
   });
 
   it('supports keyboard branch reorder and reparent with undo and redo', () => {

@@ -8,6 +8,7 @@ use crate::links::model::{
     ResolveLinksResponse,
 };
 use crate::links::resolver;
+use crate::markdown_lifecycle;
 use crate::models::{
     DeleteDocumentResult, DocumentExternalChangeStatus, DocumentSnapshot, ExternalChangeBatch,
     FileVersion, Platform, RenameDocumentResult, SaveRequest, SaveResult, WorkspaceFile,
@@ -172,6 +173,40 @@ pub fn check_open_document_external_change(
 ) -> Result<DocumentExternalChangeStatus, WorkspaceError> {
     let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::WatchWorkspace)?;
     fs_watch::document_external_change_status(&record, &relative_path, &expected_version)
+}
+
+#[tauri::command(rename = "parseMarkdownPreview")]
+pub fn parse_markdown_preview(
+    request: markdown_lifecycle::ParseMarkdownPreviewRequest,
+) -> markdown_lifecycle::ParseMarkdownPreviewResult {
+    markdown_lifecycle::parse_markdown_preview(request)
+}
+
+#[tauri::command(rename = "openMarkdownMindMap")]
+pub fn open_markdown_mind_map(
+    app: AppHandle,
+    request: markdown_lifecycle::OpenMarkdownMindMapRequest,
+) -> Result<markdown_lifecycle::OpenMarkdownMindMapResult, WorkspaceError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::OpenFile)?;
+    markdown_lifecycle::open_markdown_mind_map(&record, request)
+}
+
+#[tauri::command(rename = "serializeMindMap")]
+pub fn serialize_mind_map(
+    request: markdown_lifecycle::SerializeMindMapRequest,
+) -> markdown_lifecycle::SerializeMindMapResult {
+    markdown_lifecycle::serialize_mind_map(request)
+}
+
+#[tauri::command(rename = "saveMarkdownMindMap")]
+pub fn save_markdown_mind_map(
+    app: AppHandle,
+    request: markdown_lifecycle::SaveMarkdownMindMapRequest,
+) -> Result<markdown_lifecycle::SaveMarkdownMindMapResult, WorkspaceError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::SaveFile)?;
+    markdown_lifecycle::save_markdown_mind_map(&record, request)
 }
 
 #[tauri::command]

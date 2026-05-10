@@ -8,9 +8,11 @@
     "build:web": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "npm run test:unit && npm run test:smoke",
-    "test:unit": "vitest run src/domain/mindMap.test.ts src/features/mindmap/layout.test.ts src/features/ai-assistant/application/contextSelectors.test.ts src/features/ai-proposals/domain/aiChangeProposal.test.ts src/features/ai-proposals/application/proposalReviewStore.test.ts",
+    "test": "npm run test:browser && npm run test:desktop-smoke",
+    "test:browser": "npm run test:unit && npm run test:smoke",
+    "test:unit": "vitest run src/domain/mindMap.test.ts src/services/markdownLifecycle.test.ts src/features/mindmap/layout.test.ts src/features/mindmap/testFixtures.test.ts src/features/ai-assistant/application/contextSelectors.test.ts src/features/ai-proposals/domain/aiChangeProposal.test.ts src/features/ai-proposals/application/proposalReviewStore.test.ts",
     "test:smoke": "vitest run src/App.smoke.test.tsx src/features/mindmap/MindMapCanvas.test.tsx src/features/ai-proposals/components/ProposalReviewPanel.test.tsx",
+    "test:desktop-smoke": "node scripts/desktop-smoke.mjs",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build"
   },
