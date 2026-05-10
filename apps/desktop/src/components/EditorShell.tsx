@@ -10,21 +10,23 @@ import {
 } from 'lucide-react';
 
 import {
-  MindMapDocument,
   getMindMapNode,
   listChildNodes,
 } from '../domain/mindMap';
+import type { MindMapEditorState } from '../domain/mindMap';
 
 interface EditorShellProps {
-  document: MindMapDocument;
+  state: MindMapEditorState;
 }
 
 const outlineSections = ['Local Markdown', 'AI Drafts', 'Git History'];
 
-export function EditorShell({ document }: EditorShellProps) {
+export function EditorShell({ state }: EditorShellProps) {
+  const { document, selection, viewport, isDirty } = state;
   const rootNode = getMindMapNode(document, document.rootNodeId);
-  const selectedNode = getMindMapNode(document, document.selectedNodeId);
+  const selectedNode = getMindMapNode(document, selection.selectedNodeId);
   const childNodes = listChildNodes(document, rootNode.id);
+  const zoomPercent = Math.round(viewport.zoom * 100);
 
   return (
     <div className="app-root">
@@ -73,12 +75,12 @@ export function EditorShell({ document }: EditorShellProps) {
           <nav className="outline-tree" aria-label="Mind map nodes">
             <button className="outline-node active" type="button">
               <span className="node-dot" aria-hidden="true" />
-              {rootNode.title}
+              {rootNode.text}
             </button>
             {childNodes.map((node) => (
               <button className="outline-node child" type="button" key={node.id}>
                 <span className="node-dot muted" aria-hidden="true" />
-                {node.title}
+                {node.text}
               </button>
             ))}
           </nav>
@@ -97,7 +99,7 @@ export function EditorShell({ document }: EditorShellProps) {
             <button className="icon-button compact" type="button" aria-label="Zoom out" title="Zoom out">
               <ZoomOut size={16} />
             </button>
-            <span className="zoom-level">100%</span>
+            <span className="zoom-level">{zoomPercent}%</span>
             <button className="icon-button compact" type="button" aria-label="Zoom in" title="Zoom in">
               <ZoomIn size={16} />
             </button>
@@ -106,8 +108,8 @@ export function EditorShell({ document }: EditorShellProps) {
           <section className="mindmap-canvas" aria-label="Editable mind map canvas">
             <div className="root-node">
               <p className="node-label">Root</p>
-              <h2>{rootNode.title}</h2>
-              <p>{rootNode.note}</p>
+              <h2>{rootNode.text}</h2>
+              <p>Start from a Markdown heading or outline branch.</p>
             </div>
 
             <div className="branch-rail" aria-hidden="true">
@@ -140,8 +142,8 @@ export function EditorShell({ document }: EditorShellProps) {
 
           <section className="inspector-section">
             <p className="field-label">Selected node</p>
-            <h2>{selectedNode.title}</h2>
-            <p>{selectedNode.note}</p>
+            <h2>{selectedNode.text}</h2>
+            <p>{selectedNode.collapsed ? 'Collapsed branch' : 'Expanded branch'}</p>
           </section>
 
           <section className="inspector-section">
@@ -165,7 +167,7 @@ export function EditorShell({ document }: EditorShellProps) {
       </div>
 
       <footer className="status-bar">
-        <span>Markdown ready</span>
+        <span>{isDirty ? 'Unsaved changes' : 'Markdown ready'}</span>
         <span>AI idle</span>
         <span>Git detached</span>
       </footer>

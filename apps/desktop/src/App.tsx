@@ -1,10 +1,10 @@
 import { useMemo } from 'react';
 
 import { EditorShell } from './components/EditorShell';
-import { createEmptyMindMapDocument } from './domain/mindMap';
+import { createMindMapEditorState } from './domain/mindMap';
 
 export default function App() {
-  const document = useMemo(() => createEmptyMindMapDocument(), []);
+  const editorState = useMemo(() => createMindMapEditorState(), []);
 
-  return <EditorShell document={document} />;
+  return <EditorShell state={editorState} />;
 }
