@@ -34,6 +34,80 @@ pub struct ParseMarkdownResponse {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct SerializeMarkdownRequest {
+    pub document: MindMapDocument,
+    pub target_path: Option<String>,
+    #[serde(default)]
+    pub save_mode: MarkdownSerializeMode,
+    #[serde(default)]
+    pub preservation_policy: SerializePreservationPolicy,
+    #[serde(default)]
+    pub line_ending: MarkdownLineEnding,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializeMarkdownResponse {
+    pub markdown: Option<String>,
+    pub diagnostics: Vec<CompatibilityDiagnostic>,
+    pub metadata: SerializeMarkdownMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SerializeMarkdownMetadata {
+    pub schema_version: String,
+    pub source_path: Option<String>,
+    pub target_path: Option<String>,
+    pub save_mode: MarkdownSerializeMode,
+    pub preservation_policy: SerializePreservationPolicy,
+    pub line_ending: MarkdownLineEnding,
+    pub canonicalized: bool,
+    pub node_count: usize,
+    pub unmapped_block_count: usize,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownSerializeMode {
+    CanonicalHeadings,
+}
+
+impl Default for MarkdownSerializeMode {
+    fn default() -> Self {
+        Self::CanonicalHeadings
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SerializePreservationPolicy {
+    BlockLossy,
+    RequireConfirmation,
+    AllowLossy,
+}
+
+impl Default for SerializePreservationPolicy {
+    fn default() -> Self {
+        Self::BlockLossy
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkdownLineEnding {
+    Lf,
+    Crlf,
+}
+
+impl Default for MarkdownLineEnding {
+    fn default() -> Self {
+        Self::Lf
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct MindMapDocument {
     pub schema_version: String,
     pub source_path: Option<String>,

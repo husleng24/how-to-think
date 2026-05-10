@@ -39,12 +39,13 @@ fn visit_directory(
         .map_err(|error| WorkspaceError::from_io(WorkspaceOperation::ListFiles, None, &error))?;
 
     for entry in entries {
-        let entry = entry
-            .map_err(|error| WorkspaceError::from_io(WorkspaceOperation::ListFiles, None, &error))?;
+        let entry = entry.map_err(|error| {
+            WorkspaceError::from_io(WorkspaceOperation::ListFiles, None, &error)
+        })?;
         let entry_path = entry.path();
-        let file_type = entry
-            .file_type()
-            .map_err(|error| WorkspaceError::from_io(WorkspaceOperation::ListFiles, None, &error))?;
+        let file_type = entry.file_type().map_err(|error| {
+            WorkspaceError::from_io(WorkspaceOperation::ListFiles, None, &error)
+        })?;
         let file_name = entry.file_name();
         let file_name = file_name.to_string_lossy();
 
@@ -71,14 +72,15 @@ fn visit_directory(
             continue;
         }
 
-        let relative_path = workspace_relative_path(canonical_root, &entry_path).ok_or_else(|| {
-            WorkspaceError::new(
-                WorkspaceErrorCode::PathOutsideWorkspace,
-                WorkspaceOperation::ListFiles,
-                "The indexed path is outside the selected workspace.",
-                true,
-            )
-        })?;
+        let relative_path =
+            workspace_relative_path(canonical_root, &entry_path).ok_or_else(|| {
+                WorkspaceError::new(
+                    WorkspaceErrorCode::PathOutsideWorkspace,
+                    WorkspaceOperation::ListFiles,
+                    "The indexed path is outside the selected workspace.",
+                    true,
+                )
+            })?;
         let relative_path = validate_workspace_relative_path(
             &relative_path,
             case_sensitive,
@@ -101,12 +103,18 @@ fn workspace_file(
     relative_path: &WorkspaceRelativePath,
     metadata: &Metadata,
 ) -> Result<WorkspaceFile, WorkspaceError> {
-    let modified_at = metadata.modified().map(system_time_to_iso).map_err(|error| {
-        WorkspaceError::from_io(WorkspaceOperation::ListFiles, Some(relative_path), &error)
-    })?;
+    let modified_at = metadata
+        .modified()
+        .map(system_time_to_iso)
+        .map_err(|error| {
+            WorkspaceError::from_io(WorkspaceOperation::ListFiles, Some(relative_path), &error)
+        })?;
     let byte_size = metadata.len();
     let content_hash = hash_file(path, relative_path)?;
-    let token = format!("{modified_at}:{byte_size}:{hash}", hash = &content_hash[..16]);
+    let token = format!(
+        "{modified_at}:{byte_size}:{hash}",
+        hash = &content_hash[..16]
+    );
     let name = Path::new(relative_path)
         .file_name()
         .and_then(|name| name.to_str())
@@ -196,7 +204,9 @@ mod tests {
             .collect();
 
         assert_eq!(paths, vec!["README.md", "notes/idea.markdown"]);
-        assert!(files.iter().all(|file| file.version.content_hash.len() == 64));
+        assert!(files
+            .iter()
+            .all(|file| file.version.content_hash.len() == 64));
     }
 
     #[test]

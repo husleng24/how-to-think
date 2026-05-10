@@ -30,8 +30,8 @@ pub fn validate_workspace_root(
     path: impl AsRef<Path>,
     operation: WorkspaceOperation,
 ) -> Result<WorkspaceRecord, WorkspaceError> {
-    let canonical_root = fs::canonicalize(path.as_ref())
-        .map_err(|error| workspace_path_error(operation, &error))?;
+    let canonical_root =
+        fs::canonicalize(path.as_ref()).map_err(|error| workspace_path_error(operation, &error))?;
     let metadata =
         fs::metadata(&canonical_root).map_err(|error| workspace_path_error(operation, &error))?;
 
@@ -163,7 +163,11 @@ mod tests {
 
         assert_eq!(
             record.info.display_name,
-            temp.path().file_name().unwrap().to_string_lossy().to_string()
+            temp.path()
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string()
         );
         assert!(record.info.writable);
         assert_eq!(record.info.id.len(), 64);
@@ -188,7 +192,10 @@ mod tests {
         let record = create_workspace(&workspace_path).unwrap();
 
         assert!(workspace_path.is_dir());
-        assert_eq!(record.canonical_root, fs::canonicalize(workspace_path).unwrap());
+        assert_eq!(
+            record.canonical_root,
+            fs::canonicalize(workspace_path).unwrap()
+        );
     }
 
     #[test]

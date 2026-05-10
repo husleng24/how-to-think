@@ -146,6 +146,64 @@ impl SettingsStore {
         Ok(self.load()?.last_opened_files.get(workspace_id).cloned())
     }
 
+    pub fn rename_last_opened_file(
+        &self,
+        workspace_id: &str,
+        old_relative_path: &str,
+        new_relative_path: &str,
+        case_sensitive: bool,
+    ) -> Result<(), WorkspaceError> {
+        let old_relative_path = validate_workspace_relative_path(
+            old_relative_path,
+            case_sensitive,
+            WorkspaceOperation::RenameFile,
+        )?;
+        let new_relative_path = validate_workspace_relative_path(
+            new_relative_path,
+            case_sensitive,
+            WorkspaceOperation::RenameFile,
+        )?;
+        let mut settings = self.load()?;
+
+        if settings
+            .last_opened_files
+            .get(workspace_id)
+            .is_some_and(|path| paths_equal(path, &old_relative_path, case_sensitive))
+        {
+            settings
+                .last_opened_files
+                .insert(workspace_id.to_owned(), new_relative_path);
+            self.save(&settings)?;
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_last_opened_file(
+        &self,
+        workspace_id: &str,
+        relative_path: &str,
+        case_sensitive: bool,
+    ) -> Result<(), WorkspaceError> {
+        let relative_path = validate_workspace_relative_path(
+            relative_path,
+            case_sensitive,
+            WorkspaceOperation::DeleteFile,
+        )?;
+        let mut settings = self.load()?;
+
+        if settings
+            .last_opened_files
+            .get(workspace_id)
+            .is_some_and(|path| paths_equal(path, &relative_path, case_sensitive))
+        {
+            settings.last_opened_files.remove(workspace_id);
+            self.save(&settings)?;
+        }
+
+        Ok(())
+    }
+
     pub fn clear_remembered_workspace(&self) -> Result<(), WorkspaceError> {
         let mut settings = self.load()?;
         settings.remembered_workspace_id = None;
@@ -208,6 +266,14 @@ impl RecentWorkspace {
             display_path: record.info.display_path.clone(),
             last_opened_at: record.info.last_opened_at.clone(),
         }
+    }
+}
+
+fn paths_equal(left: &str, right: &str, case_sensitive: bool) -> bool {
+    if case_sensitive {
+        left == right
+    } else {
+        left.eq_ignore_ascii_case(right)
     }
 }
 
@@ -287,6 +353,49 @@ mod tests {
             .unwrap_err();
 
         assert_eq!(error.code, WorkspaceErrorCode::InvalidRelativePath);
+    }
+
+    #[test]
+    fn renames_matching_last_opened_file_reference() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let record =
+            validate_workspace_root(&workspace, WorkspaceOperation::SelectWorkspace).unwrap();
+        let store = SettingsStore::new(temp.path().join("settings/workspaces.json"));
+        store.remember_workspace(&record).unwrap();
+        store
+            .remember_last_opened_file(&record.info.id, "notes/idea.md", true)
+            .unwrap();
+
+        store
+            .rename_last_opened_file(&record.info.id, "notes/idea.md", "notes/renamed.md", true)
+            .unwrap();
+
+        assert_eq!(
+            store.last_opened_file(&record.info.id).unwrap().as_deref(),
+            Some("notes/renamed.md")
+        );
+    }
+
+    #[test]
+    fn clears_matching_last_opened_file_reference() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        fs::create_dir_all(&workspace).unwrap();
+        let record =
+            validate_workspace_root(&workspace, WorkspaceOperation::SelectWorkspace).unwrap();
+        let store = SettingsStore::new(temp.path().join("settings/workspaces.json"));
+        store.remember_workspace(&record).unwrap();
+        store
+            .remember_last_opened_file(&record.info.id, "notes/idea.md", true)
+            .unwrap();
+
+        store
+            .clear_last_opened_file(&record.info.id, "notes/idea.md", true)
+            .unwrap();
+
+        assert_eq!(store.last_opened_file(&record.info.id).unwrap(), None);
     }
 
     #[test]

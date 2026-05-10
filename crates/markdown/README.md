@@ -19,6 +19,8 @@ The crate exposes:
   a mind map node in v1.
 - `CompatibilityDiagnostic` for empty files, skipped hierarchy levels, mixed
   structures, malformed links, and raw-block preservation notes.
+- `SerializeMarkdownRequest` / `SerializeMarkdownResponse` for pure Markdown
+  serialization with deterministic canonical output and lossy-save diagnostics.
 
 ## Mapping Rules
 
@@ -38,6 +40,17 @@ The current implementation is a deterministic v1 adapter over the Markmap/Obsidi
 subset needed by the product contract. The crate-level API keeps the parser core
 replaceable by a future CommonMark AST-backed adapter without changing the JSON
 shape consumed by Tauri or React.
+
+## Serialization Rules
+
+- Serializer output uses canonical Markmap-compatible headings through level 6.
+- Deeper branches fall back to nested list items under the nearest level-6
+  heading so parse -> serialize -> parse can retain tree depth.
+- Existing node labels are emitted in readable Markdown source form, preserving
+  standard links and Obsidian wikilinks.
+- Frontmatter and placeable raw unmapped blocks are reinserted in deterministic
+  source order. Unplaceable raw content returns typed lossy-save diagnostics and
+  is blocked by default.
 
 ## Validation
 

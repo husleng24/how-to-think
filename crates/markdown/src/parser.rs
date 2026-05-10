@@ -293,8 +293,12 @@ impl ParserState {
             .map(|(_, id)| id.clone())
             .unwrap_or_else(|| self.root_id.clone());
         let id = self.next_node_id(line_no, &heading.text);
-        let (links, link_diagnostics) =
-            parse_links(&heading.text, line_no, &self.source_path, MarkdownBlockKind::Heading);
+        let (links, link_diagnostics) = parse_links(
+            &heading.text,
+            line_no,
+            &self.source_path,
+            MarkdownBlockKind::Heading,
+        );
         self.diagnostics.extend(link_diagnostics);
 
         let node = MindMapNode {
@@ -343,8 +347,12 @@ impl ParserState {
             .or_else(|| self.heading_stack.last().map(|(_, id)| id.clone()))
             .unwrap_or_else(|| self.root_id.clone());
         let id = self.next_node_id(line_no, &item.text);
-        let (links, link_diagnostics) =
-            parse_links(&item.text, line_no, &self.source_path, MarkdownBlockKind::ListItem);
+        let (links, link_diagnostics) = parse_links(
+            &item.text,
+            line_no,
+            &self.source_path,
+            MarkdownBlockKind::ListItem,
+        );
         self.diagnostics.extend(link_diagnostics);
 
         let node = MindMapNode {
@@ -465,27 +473,38 @@ fn parse_heading_line(line: &str) -> Option<ParsedHeading> {
     }
 
     let after_hashes = &trimmed[level..];
-    if !after_hashes.is_empty()
-        && !after_hashes
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace)
-    {
+    if !after_hashes.is_empty() && !after_hashes.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
 
     let mut text = after_hashes.trim().to_owned();
-    if text.ends_with('#') {
-        text = text
-            .trim_end_matches('#')
-            .trim_end()
-            .to_owned();
+    if let Some(closing_start) = closing_hash_sequence_start(&text) {
+        text = text[..closing_start].trim_end().to_owned();
     }
 
     Some(ParsedHeading {
         level: level as u8,
         text,
     })
+}
+
+fn closing_hash_sequence_start(text: &str) -> Option<usize> {
+    let trimmed_end = text.trim_end();
+    let hash_start = trimmed_end
+        .char_indices()
+        .rev()
+        .find_map(|(index, ch)| (ch != '#').then_some(index + ch.len_utf8()))?;
+
+    if hash_start == trimmed_end.len() {
+        return None;
+    }
+
+    let before_hashes = &trimmed_end[..hash_start];
+    before_hashes
+        .chars()
+        .last()
+        .is_some_and(char::is_whitespace)
+        .then_some(hash_start)
 }
 
 #[derive(Debug)]
@@ -544,11 +563,7 @@ fn parse_list_marker(trimmed: &str) -> Option<(String, ListMarkerKind, Option<u3
 
     if matches!(first, '-' | '*' | '+') {
         let after_marker = &trimmed[first.len_utf8()..];
-        if after_marker
-            .chars()
-            .next()
-            .is_some_and(char::is_whitespace)
-        {
+        if after_marker.chars().next().is_some_and(char::is_whitespace) {
             return Some((
                 first.to_string(),
                 ListMarkerKind::Unordered,
@@ -584,11 +599,7 @@ fn parse_list_marker(trimmed: &str) -> Option<(String, ListMarkerKind, Option<u3
 
     let marker_raw = &trimmed[..=marker_end];
     let after_marker = &trimmed[marker_end + delimiter.len_utf8()..];
-    if !after_marker
-        .chars()
-        .next()
-        .is_some_and(char::is_whitespace)
-    {
+    if !after_marker.chars().next().is_some_and(char::is_whitespace) {
         return None;
     }
 
@@ -686,8 +697,14 @@ fn parse_links(
                             continue;
                         }
                         None => {
-                            let token_origin =
-                                link_origin(source_path, block_kind, line_no, text, index, text.len());
+                            let token_origin = link_origin(
+                                source_path,
+                                block_kind,
+                                line_no,
+                                text,
+                                index,
+                                text.len(),
+                            );
                             diagnostics_out.push(diagnostics::malformed_link(
                                 token_origin,
                                 text[index..].to_owned(),

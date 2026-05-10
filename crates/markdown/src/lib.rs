@@ -7,11 +7,15 @@
 pub mod diagnostics;
 pub mod model;
 pub mod parser;
+pub mod serializer;
 
 pub use model::{
     CompatibilityDiagnostic, DiagnosticSeverity, LinkToken, LinkTokenKind, ListMarker,
-    ListMarkerKind, MarkdownBlockKind, MarkdownOrigin, MindMapDocument, MindMapNode,
-    MindMapNodeKind, ParseMarkdownRequest, ParseMarkdownResponse, ParseMode,
-    PreservationPolicy, SourceSpan, UnmappedMarkdownBlock, UnmappedPlacement,
+    ListMarkerKind, MarkdownBlockKind, MarkdownLineEnding, MarkdownOrigin, MarkdownSerializeMode,
+    MindMapDocument, MindMapNode, MindMapNodeKind, ParseMarkdownRequest, ParseMarkdownResponse,
+    ParseMode, PreservationPolicy, SerializeMarkdownMetadata, SerializeMarkdownRequest,
+    SerializeMarkdownResponse, SerializePreservationPolicy, SourceSpan, UnmappedMarkdownBlock,
+    UnmappedPlacement,
 };
 pub use parser::{parse_markdown, parse_markdown_to_mindmap};
+pub use serializer::{serialize_markdown, serialize_markdown_document};

@@ -1,4 +1,6 @@
+pub mod atomic_write;
 pub mod commands;
+pub mod documents;
 pub mod errors;
 pub mod file_index;
 pub mod models;
@@ -19,6 +21,11 @@ pub fn run() {
             commands::refresh_workspace_files,
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
+            commands::create_markdown_document,
+            commands::open_markdown_document,
+            commands::save_markdown_document,
+            commands::rename_markdown_document,
+            commands::delete_markdown_document,
         ])
         .run(tauri::generate_context!())
         .expect("error while running How to Think desktop shell");

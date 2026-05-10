@@ -1,6 +1,6 @@
 use how_to_think_markdown::{
     parse_markdown_to_mindmap, DiagnosticSeverity, LinkTokenKind, MarkdownBlockKind,
-    MindMapDocument, ParseMarkdownResponse, ParseMode, PreservationPolicy,
+    MindMapDocument, MindMapNodeKind, ParseMarkdownResponse, ParseMode, PreservationPolicy,
 };
 
 fn document(response: ParseMarkdownResponse) -> MindMapDocument {
@@ -32,7 +32,7 @@ fn find_node_id(document: &MindMapDocument, title: &str) -> String {
     document
         .nodes
         .values()
-        .find(|node| node.title == title)
+        .find(|node| node.node_kind != MindMapNodeKind::VirtualRoot && node.title == title)
         .map(|node| node.id.clone())
         .unwrap_or_else(|| panic!("node not found: {title}"))
 }
@@ -74,7 +74,10 @@ fn parses_nested_lists_preserving_order() {
     );
 
     let roadmap = find_node_id(&document, "Roadmap");
-    assert_eq!(child_titles(&document, &roadmap), vec!["MVP", "Beta", "Launch"]);
+    assert_eq!(
+        child_titles(&document, &roadmap),
+        vec!["MVP", "Beta", "Launch"]
+    );
 
     let launch = find_node_id(&document, "Launch");
     let marker = document.nodes[&launch].list_marker.as_ref().unwrap();
@@ -154,7 +157,10 @@ fn reports_malformed_links_without_panic() {
 #[test]
 fn preserves_wikilinks_and_standard_links_in_node_text() {
     let document = parse_fixture("links", include_str!("fixtures/links.md"));
-    let references = find_node_id(&document, "References [[Topic]] [[path/to/Topic]] [[Topic|Alias]] [Spec](relative.md)");
+    let references = find_node_id(
+        &document,
+        "References [[Topic]] [[path/to/Topic]] [[Topic|Alias]] [Spec](relative.md)",
+    );
     let node = &document.nodes[&references];
 
     assert_eq!(node.links.len(), 4);

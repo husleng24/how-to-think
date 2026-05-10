@@ -77,3 +77,60 @@ pub struct WorkspaceRecord {
     pub info: WorkspaceInfo,
     pub canonical_root: PathBuf,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentSnapshot {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub content: String,
+    pub version: FileVersion,
+    pub opened_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum SaveReason {
+    Manual,
+    Autosave,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveRequest {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub content: String,
+    pub expected_version: FileVersion,
+    pub reason: SaveReason,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveResult {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub version: FileVersion,
+    pub saved_at: IsoDateTime,
+    pub byte_size: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RenameDocumentResult {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub new_relative_path: WorkspaceRelativePath,
+    pub file: WorkspaceFile,
+    pub files: Vec<WorkspaceFile>,
+    pub renamed_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DeleteDocumentResult {
+    pub workspace_id: WorkspaceId,
+    pub relative_path: WorkspaceRelativePath,
+    pub files: Vec<WorkspaceFile>,
+    pub deleted_at: IsoDateTime,
+}
