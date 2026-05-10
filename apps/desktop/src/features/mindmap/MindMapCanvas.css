@@ -75,6 +75,12 @@
   border-color: #317682;
 }
 
+.mindmap-node-editor-shell,
+.mindmap-node-editor-shell:hover {
+  border-color: #245f68;
+  cursor: text;
+}
+
 .mindmap-node-main:focus-visible {
   outline: 3px solid rgba(49, 118, 130, 0.28);
   outline-offset: 2px;
@@ -149,6 +155,29 @@
   font-weight: 650;
 }
 
+.mindmap-node-editor {
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #24272a;
+  font: inherit;
+  font-size: 0.98rem;
+  font-weight: 760;
+  line-height: 1.28;
+  outline: 0;
+  overflow: hidden auto;
+  resize: none;
+}
+
+.mindmap-node.is-root .mindmap-node-editor {
+  font-size: 1.32rem;
+  line-height: 1.2;
+}
+
 .mindmap-node-toggle {
   position: absolute;
   right: -14px;
@@ -192,6 +221,8 @@
   top: 16px;
   right: 16px;
   display: inline-flex;
+  max-width: calc(100% - 32px);
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 6px;
@@ -228,9 +259,28 @@
   color: #255e67;
 }
 
+.mindmap-control-button:disabled {
+  border-color: transparent;
+  color: #aaa199;
+  cursor: not-allowed;
+  opacity: 0.54;
+}
+
+.mindmap-control-button:disabled:hover {
+  border-color: transparent;
+  color: #aaa199;
+}
+
 .mindmap-control-button:focus-visible {
   outline: 2px solid rgba(49, 118, 130, 0.32);
   outline-offset: 2px;
+}
+
+.mindmap-control-divider {
+  align-self: stretch;
+  width: 1px;
+  min-height: 24px;
+  background: #ded6ca;
 }
 
 .mindmap-empty-state {

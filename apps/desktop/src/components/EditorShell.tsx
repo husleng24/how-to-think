@@ -38,7 +38,7 @@ export function EditorShell({ state, store: providedStore }: EditorShellProps) {
   const editorState = useSyncExternalStore(store.subscribe, store.getState, store.getState);
   const dispatch = useCallback(
     (command: MindMapCommand) => {
-      store.dispatch(command);
+      return store.dispatch(command);
     },
     [store],
   );
@@ -121,7 +121,12 @@ export function EditorShell({ state, store: providedStore }: EditorShellProps) {
         </aside>
 
         <main className="canvas-region" aria-label="Mind map editor">
-          <MindMapCanvas state={editorState} onCommand={dispatch} />
+          <MindMapCanvas
+            state={editorState}
+            onCommand={dispatch}
+            onUndo={() => store.undo()}
+            onRedo={() => store.redo()}
+          />
         </main>
 
         <aside className="side-panel inspector-panel" aria-label="Node inspector">

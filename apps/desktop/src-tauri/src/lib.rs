@@ -4,6 +4,7 @@ pub mod documents;
 pub mod errors;
 pub mod file_index;
 pub mod fs_watch;
+pub mod links;
 pub mod models;
 pub mod path_guard;
 pub mod settings;
@@ -21,6 +22,9 @@ pub fn run() {
             commands::create_workspace_at_path,
             commands::list_workspace_files,
             commands::refresh_workspace_files,
+            commands::index_workspace_links,
+            commands::resolve_workspace_link,
+            commands::resolve_workspace_links,
             commands::start_workspace_change_detection,
             commands::refresh_workspace_external_changes,
             commands::stop_workspace_change_detection,

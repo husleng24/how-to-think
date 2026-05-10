@@ -1,6 +1,12 @@
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
+use crate::links::index::WorkspaceLinkIndex;
+use crate::links::model::{
+    LinkIndexSnapshot, LinkResolution, ResolveLinkRequest, ResolveLinksRequest,
+    ResolveLinksResponse,
+};
+use crate::links::resolver;
 use crate::models::{
     DeleteDocumentResult, DocumentExternalChangeStatus, DocumentSnapshot, ExternalChangeBatch,
     FileVersion, Platform, RenameDocumentResult, SaveRequest, SaveResult, WorkspaceFile,
@@ -86,6 +92,47 @@ pub fn refresh_workspace_files(
     workspace_id: String,
 ) -> Result<Vec<WorkspaceFile>, WorkspaceError> {
     list_workspace_files(app, workspace_id)
+}
+
+#[tauri::command]
+pub fn index_workspace_links(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<LinkIndexSnapshot, WorkspaceError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)?;
+    WorkspaceLinkIndex::from_record(&record).map(|index| index.snapshot())
+}
+
+#[tauri::command]
+pub fn resolve_workspace_link(
+    app: AppHandle,
+    request: ResolveLinkRequest,
+) -> Result<LinkResolution, WorkspaceError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::OpenFile)?;
+    let index = WorkspaceLinkIndex::from_record(&record)?;
+
+    Ok(resolver::resolve_link(
+        &index,
+        &request.source_relative_path,
+        request.link,
+    ))
+}
+
+#[tauri::command]
+pub fn resolve_workspace_links(
+    app: AppHandle,
+    request: ResolveLinksRequest,
+) -> Result<ResolveLinksResponse, WorkspaceError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::OpenFile)?;
+    let index = WorkspaceLinkIndex::from_record(&record)?;
+
+    Ok(resolver::resolve_links(
+        &index,
+        &request.source_relative_path,
+        request.links,
+    ))
 }
 
 #[tauri::command]
