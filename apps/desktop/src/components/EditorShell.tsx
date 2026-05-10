@@ -14,6 +14,7 @@ import {
 } from '../domain/mindMap';
 import type { MindMapCommand, MindMapEditorState, MindMapEditorStore } from '../domain/mindMap';
 import {
+  AiAssistantPanel,
   AiProviderSettingsPanel,
   useAiProviderSettings,
 } from '../features/ai-assistant';
@@ -105,6 +106,7 @@ export function EditorShell({
   const [workspacePathInput, setWorkspacePathInput] = useState(
     workspaceState?.workspace?.displayPath ?? '',
   );
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [newMarkdownPath, setNewMarkdownPath] = useState('');
   const [markdownPathInput, setMarkdownPathInput] = useState(
     workspaceState?.active?.snapshot.relativePath ?? '',
@@ -114,6 +116,7 @@ export function EditorShell({
   const zoomPercent = Math.round(viewport.zoom * 100);
   const trimmedWorkspacePath = workspacePathInput.trim();
   const trimmedNewMarkdownPath = newMarkdownPath.trim();
+  const canOpenAiAssistant = Boolean(workspaceState?.workspace && workspaceState.active);
   const linkInteraction = useMemo<LinkInteractionController | undefined>(() => {
     if (!workspaceState?.workspace || !workspaceState.active || !workspaceActions) {
       return undefined;
@@ -186,9 +189,16 @@ export function EditorShell({
           <button
             className="text-button"
             type="button"
-            aria-label={aiProviderSetupState.usable ? 'AI' : 'AI unavailable'}
-            disabled={!aiProviderSetupState.usable}
-            title={aiProviderSetupState.nextAction}
+            aria-label={
+              canOpenAiAssistant
+                ? isAiAssistantOpen
+                  ? 'Close AI assistant'
+                  : 'Open AI assistant'
+                : 'AI unavailable'
+            }
+            disabled={!canOpenAiAssistant}
+            title={canOpenAiAssistant ? aiProviderSetupState.nextAction : 'Open a Markdown file first.'}
+            onClick={() => setIsAiAssistantOpen((open) => !open)}
           >
             <Bot size={17} />
             AI
@@ -416,6 +426,15 @@ export function EditorShell({
           />
         </aside>
       </div>
+
+      <AiAssistantPanel
+        open={isAiAssistantOpen}
+        editorState={editorState}
+        workspaceState={workspaceState}
+        providerController={aiProviderController}
+        onClose={() => setIsAiAssistantOpen(false)}
+        onOpenProviderSettings={() => setIsAiAssistantOpen(false)}
+      />
 
       <footer className="status-bar">
         <span>{workspaceState?.saveStatus.message ?? (isDirty ? 'Unsaved changes' : 'Markdown ready')}</span>

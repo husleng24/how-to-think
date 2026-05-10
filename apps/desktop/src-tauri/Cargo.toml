@@ -10,6 +10,10 @@ rust-version = "1.77"
 name = "how_to_think_desktop_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[[bin]]
+name = "how-to-think"
+path = "src/bin/how-to-think.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

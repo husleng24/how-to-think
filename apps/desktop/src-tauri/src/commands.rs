@@ -1,4 +1,5 @@
 use crate::ai::context::{build_context_snapshot, AiContextSnapshot, AiContextSnapshotRequest};
+use crate::command_service;
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
@@ -11,10 +12,9 @@ use crate::links::resolver;
 use crate::markdown_lifecycle;
 use crate::models::{
     DeleteDocumentResult, DocumentExternalChangeStatus, DocumentSnapshot, ExternalChangeBatch,
-    FileVersion, Platform, RenameDocumentResult, SaveRequest, SaveResult, WorkspaceFile,
-    WorkspaceRecord, WorkspaceSession,
+    FileVersion, RenameDocumentResult, SaveRequest, SaveResult, WorkspaceFile, WorkspaceRecord,
+    WorkspaceSession,
 };
-use crate::path_guard;
 use crate::settings::SettingsStore;
 use crate::workspace::{
     create_workspace, validate_workspace_root, workspace_session,
@@ -306,11 +306,7 @@ pub fn remember_last_opened_file(
 
 #[tauri::command]
 pub fn validate_workspace_relative_path(relative_path: String) -> Result<String, WorkspaceError> {
-    path_guard::validate_workspace_relative_path(
-        &relative_path,
-        Platform::current().default_case_sensitive(),
-        WorkspaceOperation::OpenFile,
-    )
+    command_service::validate_workspace_relative_path(&relative_path)
 }
 
 #[tauri::command]
@@ -340,9 +336,7 @@ fn settings_store(
         .with_detail("source", error.to_string())
     })?;
 
-    Ok(SettingsStore::new(
-        settings_dir.join("workspace-settings.json"),
-    ))
+    Ok(command_service::workspace_settings_store(settings_dir))
 }
 
 fn workspace_record_for_id(

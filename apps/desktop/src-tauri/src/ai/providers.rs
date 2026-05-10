@@ -11,7 +11,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
-const AI_PROVIDER_SETTINGS_FILE: &str = "ai-providers.json";
+pub const AI_PROVIDER_SETTINGS_FILE: &str = "ai-providers.json";
 const DEFAULT_TIMEOUT_SECONDS: u64 = 30;
 const MIN_TIMEOUT_SECONDS: u64 = 1;
 const MAX_TIMEOUT_SECONDS: u64 = 600;

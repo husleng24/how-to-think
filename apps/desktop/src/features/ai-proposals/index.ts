@@ -1,3 +1,4 @@
+export * from './application/applyProposal';
 export * from './application/messageMapping';
 export * from './application/proposalPreviewAdapter';
 export * from './application/proposalReviewStore';

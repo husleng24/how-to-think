@@ -140,3 +140,112 @@ export interface AiProviderSetupState {
   nextAction: string;
   activeProvider?: AiProviderConfig;
 }
+
+export type AiMessageRole = 'user' | 'assistant' | 'error';
+
+export type AiRunStatus =
+  | 'queued'
+  | 'running'
+  | 'streaming'
+  | 'completed'
+  | 'failed'
+  | 'cancelled';
+
+export type AiErrorCode =
+  | 'invalid_request'
+  | 'provider_not_configured'
+  | 'provider_disabled'
+  | 'provider_config_invalid'
+  | 'provider_unavailable'
+  | 'provider_timed_out'
+  | 'provider_cancelled'
+  | 'provider_non_zero_exit'
+  | 'provider_output_malformed'
+  | 'provider_output_too_large'
+  | 'runtime_unavailable';
+
+export interface AiError {
+  code: AiErrorCode | string;
+  message: string;
+  recoverable: boolean;
+  guidance: string;
+  providerId?: string;
+  runId?: string;
+  exitCode?: number;
+  detail?: string;
+}
+
+export interface AiConversationLimits {
+  maxHistoryMessages: number;
+  maxHistoryBytes: number;
+}
+
+export interface AiConversationRequest {
+  workspaceId: WorkspaceId;
+  sessionId?: string | null;
+  providerId?: string | null;
+  documentId?: string | null;
+  documentPath?: WorkspaceRelativePath | null;
+  prompt: string;
+  context: AiContextSnapshot;
+  limits?: Partial<AiConversationLimits>;
+}
+
+export interface AiMessage {
+  id: string;
+  sessionId: string;
+  runId: string;
+  role: AiMessageRole;
+  content: string;
+  createdAt: string;
+  contextLabel?: string;
+  errorCode?: AiErrorCode | string;
+}
+
+export interface AiRun {
+  id: string;
+  sessionId: string;
+  providerId: string;
+  status: AiRunStatus;
+  queuedAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  durationMs?: number;
+  error?: AiError;
+}
+
+export interface AiSession {
+  id: string;
+  workspaceId: WorkspaceId;
+  providerId: string;
+  documentId?: string;
+  documentPath?: WorkspaceRelativePath;
+  messages: AiMessage[];
+  createdAt: string;
+  updatedAt: string;
+  lastRunStatus: AiRunStatus;
+}
+
+export interface AiRunDiagnostics {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+  timedOut: boolean;
+  cancelled: boolean;
+}
+
+export interface AiResponse {
+  run: AiRun;
+  session: AiSession;
+  assistantMessage?: AiMessage;
+  error?: AiError;
+  diagnostics?: AiRunDiagnostics;
+}
+
+export interface AiRunEvent {
+  run: AiRun;
+  status: AiRunStatus;
+  error?: AiError;
+}

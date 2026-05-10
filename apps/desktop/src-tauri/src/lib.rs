@@ -1,5 +1,7 @@
 pub mod ai;
 pub mod atomic_write;
+pub mod cli;
+pub mod command_service;
 pub mod commands;
 pub mod documents;
 pub mod errors;

@@ -17,6 +17,10 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
 }));
 
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async () => () => undefined),
+}));
+
 const invokeMock = vi.mocked(invoke);
 
 describe('App workspace lifecycle', () => {
@@ -27,6 +31,7 @@ describe('App workspace lifecycle', () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    Reflect.deleteProperty(window, '__TAURI_INTERNALS__');
   });
 
   it('shows a workspace selection and creation path on first launch', async () => {
@@ -323,6 +328,59 @@ describe('App workspace lifecycle', () => {
 
     expect(event.defaultPrevented).toBe(true);
   });
+
+  it('opens the AI assistant and keeps mind map editing usable with the panel open', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const fixture = createWorkspaceLifecycleFixture({
+      markdownFiles: {
+        'notes/plan.md': '# Plan\n',
+      },
+    });
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(fixture.session({ lastOpenedFile: 'notes/plan.md' }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(fixture.openResult(payload?.request?.relativePath ?? 'notes/plan.md'));
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        case 'list_ai_providers':
+          return Promise.resolve(healthyAiProviderSettings());
+        case 'preview_ai_context_snapshot':
+          return Promise.resolve(aiContextSnapshot(payload?.request));
+        case 'send_ai_conversation_message':
+          return Promise.resolve(aiResponse(payload?.request));
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Plan' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /open ai assistant/i }));
+
+    expect(await screen.findByRole('complementary', { name: /ai assistant/i })).toBeVisible();
+    expect(await screen.findByText('Selected node: Plan')).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Summarize this map' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Assistant shell response')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /add child node/i }));
+
+    expect(screen.getByRole('textbox', { name: /rename new thought/i })).toBeVisible();
+  });
 });
 
 interface InvokePayload {
@@ -333,6 +391,20 @@ interface InvokePayload {
   request?: {
     workspaceId?: string;
     relativePath?: string;
+    scope?: 'selectedNode' | 'selectedBranch' | 'currentFile' | 'workspaceSummary';
+    document?: {
+      id?: string;
+      version?: number;
+    };
+    selectedNodeId?: string;
+    contentRevision?: number;
+    prompt?: string;
+    context?: {
+      displayLabel: string;
+      workspaceId: string;
+    };
+    sessionId?: string;
+    providerId?: string;
   };
 }
 
@@ -475,4 +547,104 @@ function markdownDocument(relativePath: string): MarkdownMindMapDocument {
 function titleForPath(relativePath: string): string {
   const fileName = relativePath.replace(/\.(md|markdown)$/i, '');
   return fileName.charAt(0).toUpperCase() + fileName.slice(1);
+}
+
+function healthyAiProviderSettings() {
+  return {
+    activeProviderId: 'provider-1',
+    providers: [
+      {
+        id: 'provider-1',
+        displayName: 'Local Codex',
+        kind: 'codex',
+        executablePath: 'codex',
+        argumentTemplate: [],
+        healthCheckArgs: ['--version'],
+        timeoutSeconds: 30,
+        maxOutputBytes: 64 * 1024,
+        enabled: true,
+        lastHealthStatus: {
+          status: 'ok',
+          checkedAt: '2026-05-10T00:00:00Z',
+          message: 'Healthy',
+        },
+      },
+    ],
+  };
+}
+
+function aiContextSnapshot(request: InvokePayload['request']) {
+  return {
+    workspaceId: request?.workspaceId ?? 'workspace-1',
+    scope: request?.scope ?? 'selectedNode',
+    displayLabel: 'Selected node: Plan',
+    documentId: request?.document?.id ?? 'notes/plan.md',
+    documentPath: request?.relativePath ?? 'notes/plan.md',
+    documentRevision: `mindmap:${request?.document?.version ?? 1}:content:${request?.contentRevision ?? 1}`,
+    documentContentHash: 'hash',
+    selectedNodeIds: request?.selectedNodeId ? [request.selectedNodeId] : ['root'],
+    items: [
+      {
+        id: 'item-1',
+        kind: 'mindMapNode',
+        label: 'Selected node: Plan',
+        relativePath: 'notes/plan.md',
+        nodeIds: ['root'],
+        content: 'Plan context',
+        byteEstimate: 12,
+      },
+    ],
+    byteEstimate: 12,
+    tokenEstimate: 3,
+    truncated: false,
+    warnings: [],
+  };
+}
+
+function aiResponse(request: InvokePayload['request']) {
+  const sessionId = request?.sessionId ?? 'session';
+  const run = {
+    id: 'run-1',
+    sessionId,
+    providerId: request?.providerId ?? 'provider-1',
+    status: 'completed',
+    queuedAt: '2026-05-10T00:00:00Z',
+    startedAt: '2026-05-10T00:00:00Z',
+    completedAt: '2026-05-10T00:00:01Z',
+  };
+  const messages = [
+    {
+      id: 'message-user',
+      sessionId,
+      runId: run.id,
+      role: 'user',
+      content: request?.prompt ?? '',
+      contextLabel: request?.context?.displayLabel ?? 'Selected node: Plan',
+      createdAt: '2026-05-10T00:00:00Z',
+    },
+    {
+      id: 'message-assistant',
+      sessionId,
+      runId: run.id,
+      role: 'assistant',
+      content: 'Assistant shell response',
+      createdAt: '2026-05-10T00:00:01Z',
+    },
+  ];
+
+  return {
+    run,
+    session: {
+      id: sessionId,
+      workspaceId: request?.workspaceId ?? request?.context?.workspaceId ?? 'workspace-1',
+      providerId: request?.providerId ?? 'provider-1',
+      documentId: request?.document?.id ?? 'notes/plan.md',
+      documentPath: 'notes/plan.md',
+      messages,
+      createdAt: '2026-05-10T00:00:00Z',
+      updatedAt: '2026-05-10T00:00:01Z',
+      lastRunStatus: 'completed',
+    },
+    assistantMessage: messages[1],
+  };
 }
