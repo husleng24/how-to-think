@@ -199,6 +199,12 @@
   overflow-wrap: anywhere;
 }
 
+.mindmap-node-text:has(.markdown-link-popover) {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
 .mindmap-node.is-root .mindmap-node-text {
   font-size: 1.32rem;
   line-height: 1.2;

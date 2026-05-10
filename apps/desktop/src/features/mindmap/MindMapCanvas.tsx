@@ -22,6 +22,8 @@ import type {
   NodeId,
   ViewportState,
 } from './domain/mindMap';
+import type { LinkInteractionController } from '../markdown-compat';
+import { MarkdownLinkText } from '../markdown-compat';
 import {
   getClosestVisibleNodeId,
   getMindMapCommandAvailability,
@@ -39,6 +41,7 @@ interface MindMapCanvasProps {
   onCommand(command: MindMapCommand): MindMapCommandResult | void;
   onUndo?(): MindMapCommandResult | void;
   onRedo?(): MindMapCommandResult | void;
+  linkInteraction?: LinkInteractionController;
 }
 
 interface PanDragState {
@@ -70,7 +73,13 @@ const DEFAULT_VIEWPORT_WIDTH = 900;
 const DEFAULT_VIEWPORT_HEIGHT = 540;
 const BRANCH_DRAG_THRESHOLD = 5;
 
-export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanvasProps) {
+export function MindMapCanvas({
+  state,
+  onCommand,
+  onUndo,
+  onRedo,
+  linkInteraction,
+}: MindMapCanvasProps) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const panDragRef = useRef<PanDragState | null>(null);
   const branchDragRef = useRef<BranchDragState | null>(null);
@@ -290,7 +299,7 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
 
   const handleNodeClick = (
     nodeId: NodeId,
-    event: MouseEvent<HTMLButtonElement>,
+    event: MouseEvent<HTMLElement>,
   ): void => {
     if (suppressNextNodeClickRef.current) {
       suppressNextNodeClickRef.current = false;
@@ -587,6 +596,7 @@ export function MindMapCanvas({ state, onCommand, onUndo, onRedo }: MindMapCanva
                 focused={state.selection.focusedNodeId === node.id}
                 editing={editing?.nodeId === node.id}
                 editDraft={editing?.nodeId === node.id ? editing.draft : ''}
+                linkInteraction={linkInteraction}
                 onBeginEditing={beginEditing}
                 onCancelEditing={cancelEditing}
                 onCommand={onCommand}
@@ -611,6 +621,7 @@ function MindMapNodeView({
   focused,
   editing,
   editDraft,
+  linkInteraction,
   onBeginEditing,
   onCancelEditing,
   onCommand,
@@ -625,12 +636,13 @@ function MindMapNodeView({
   focused: boolean;
   editing: boolean;
   editDraft: string;
+  linkInteraction?: LinkInteractionController;
   onBeginEditing(nodeId: NodeId): void;
   onCancelEditing(): void;
   onCommand(command: MindMapCommand): MindMapCommandResult | void;
   onCommitEditing(): void;
   onFocusNode(nodeId: NodeId): void;
-  onNodeClick(nodeId: NodeId, event: MouseEvent<HTMLButtonElement>): void;
+  onNodeClick(nodeId: NodeId, event: MouseEvent<HTMLElement>): void;
   onNodePointerDown(nodeId: NodeId, event: PointerEvent<HTMLElement>): void;
   onUpdateEditDraft(draft: string): void;
 }) {
@@ -704,9 +716,10 @@ function MindMapNodeView({
           />
         </div>
       ) : (
-        <button
+        <div
           className="mindmap-node-main"
-          type="button"
+          role="button"
+          tabIndex={0}
           aria-label={displayText}
           aria-pressed={selected}
           onClick={(event) => onNodeClick(layoutNode.id, event)}
@@ -722,8 +735,10 @@ function MindMapNodeView({
               <span className="mindmap-node-count">{childLabel}</span>
             ) : null}
           </span>
-          <span className="mindmap-node-text">{displayText}</span>
-        </button>
+          <span className="mindmap-node-text">
+            <MarkdownLinkText text={displayText} linkInteraction={linkInteraction} />
+          </span>
+        </div>
       )}
 
       {layoutNode.childCount > 0 ? (

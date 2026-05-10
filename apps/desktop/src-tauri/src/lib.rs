@@ -13,6 +13,9 @@ pub mod settings;
 pub mod time_utils;
 pub mod workspace;
 
+#[cfg(test)]
+pub(crate) mod workspace_test_fixtures;
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()

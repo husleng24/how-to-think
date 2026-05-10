@@ -336,6 +336,8 @@ mod tests {
     use super::*;
     use crate::errors::{WorkspaceErrorCode, WorkspaceOperation};
     use crate::workspace::validate_workspace_root;
+    use crate::workspace::workspace_session;
+    use crate::workspace_test_fixtures::LocalFirstWorkspaceFixture;
     use how_to_think_markdown::{MarkdownBlockKind, PreservationPolicy};
     use std::fs;
     use std::path::Path;
@@ -445,6 +447,61 @@ mod tests {
     }
 
     #[test]
+    fn local_first_workspace_lifecycle_reopens_saved_content_after_restart() {
+        let fixture = LocalFirstWorkspaceFixture::create();
+        let record = fixture.record();
+        let session = workspace_session(record).unwrap();
+        let indexed_paths: Vec<_> = session
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect();
+
+        assert_eq!(indexed_paths, fixture.expected_indexed_markdown_paths());
+
+        let created = documents::create_document(
+            record,
+            "projects/new-local.md",
+            Some("# Local draft\n\n## Before save\n".to_owned()),
+        )
+        .unwrap();
+
+        assert_eq!(created.content, "# Local draft\n\n## Before save\n");
+
+        let opened =
+            open_markdown_mind_map(record, open_request(record, "projects/new-local.md")).unwrap();
+        let mut document = opened.document.unwrap();
+        rename_first_child(&mut document, "Saved local draft");
+
+        let saved =
+            save_markdown_mind_map(record, save_request(&opened.snapshot, document)).unwrap();
+        let saved_markdown = saved.markdown.clone().unwrap();
+
+        assert_eq!(saved.status, SaveMarkdownMindMapStatus::Saved);
+        assert_eq!(
+            fs::read_to_string(fixture.root().join("projects/new-local.md")).unwrap(),
+            saved_markdown
+        );
+        assert!(saved
+            .files
+            .iter()
+            .any(|file| file.relative_path == "projects/new-local.md"));
+
+        let restarted_record = fixture.restarted_record();
+        let reopened = open_markdown_mind_map(
+            &restarted_record,
+            open_request(&restarted_record, "projects/new-local.md"),
+        )
+        .unwrap();
+
+        assert_eq!(reopened.snapshot.content, saved_markdown);
+        assert_eq!(
+            reopened.snapshot.content,
+            fs::read_to_string(fixture.root().join("projects/new-local.md")).unwrap()
+        );
+    }
+
+    #[test]
     fn save_preserves_external_modification_conflict() {
         let temp = tempfile::tempdir().unwrap();
         fs::write(temp.path().join("plan.md"), "# Old\n").unwrap();
@@ -463,6 +520,24 @@ mod tests {
             fs::read_to_string(temp.path().join("plan.md")).unwrap(),
             "# External\n"
         );
+    }
+
+    #[test]
+    fn save_blocks_external_deletion_before_overwrite() {
+        let fixture = LocalFirstWorkspaceFixture::create();
+        let record = fixture.record();
+        let opened = open_markdown_mind_map(record, open_request(record, "notes/plan.md")).unwrap();
+
+        fs::remove_file(fixture.root().join("notes/plan.md")).unwrap();
+
+        let error = save_markdown_mind_map(
+            record,
+            save_request(&opened.snapshot, opened.document.unwrap()),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, WorkspaceErrorCode::FileNotFound);
+        assert!(!fixture.root().join("notes/plan.md").exists());
     }
 
     #[test]
@@ -542,5 +617,20 @@ mod tests {
             open_markdown_mind_map(&record, open_request(&record, "missing.md")).unwrap_err();
 
         assert_eq!(error.code, WorkspaceErrorCode::FileNotFound);
+    }
+
+    fn rename_first_child(document: &mut MindMapDocument, title: &str) {
+        let first_child_id = document
+            .nodes
+            .get(&document.root_node_id)
+            .and_then(|root| root.children.first())
+            .expect("fixture document should have a first child")
+            .clone();
+        let child = document
+            .nodes
+            .get_mut(&first_child_id)
+            .expect("first child should exist");
+        child.title = title.to_owned();
+        child.raw_text = format!("# {title}");
     }
 }

@@ -20,6 +20,11 @@ import {
 import type { AiProviderSettingsController } from '../features/ai-assistant';
 import { createProposalReviewStore, ProposalReviewPanel } from '../features/ai-proposals';
 import type { ProposalReview, ProposalReviewStore } from '../features/ai-proposals';
+import {
+  CompatibilityDiagnosticsPanel,
+  resolveWorkspaceLink,
+} from '../features/markdown-compat';
+import type { LinkInteractionController } from '../features/markdown-compat';
 import { MindMapCanvas } from '../features/mindmap/MindMapCanvas';
 import type { WorkspaceLifecycleActions, WorkspaceLifecycleState } from '../features/workspace';
 
@@ -109,6 +114,23 @@ export function EditorShell({
   const zoomPercent = Math.round(viewport.zoom * 100);
   const trimmedWorkspacePath = workspacePathInput.trim();
   const trimmedNewMarkdownPath = newMarkdownPath.trim();
+  const linkInteraction = useMemo<LinkInteractionController | undefined>(() => {
+    if (!workspaceState?.workspace || !workspaceState.active || !workspaceActions) {
+      return undefined;
+    }
+
+    return {
+      workspaceId: workspaceState.workspace.id,
+      sourceRelativePath: workspaceState.active.snapshot.relativePath,
+      resolveLink: resolveWorkspaceLink,
+      openTarget(relativePath) {
+        return workspaceActions.requestOpenFile(relativePath);
+      },
+      createTarget(relativePath) {
+        return workspaceActions.requestCreateFile(relativePath);
+      },
+    };
+  }, [workspaceActions, workspaceState?.active, workspaceState?.workspace]);
 
   useEffect(() => {
     setWorkspacePathInput(workspaceState?.workspace?.displayPath ?? '');
@@ -287,6 +309,7 @@ export function EditorShell({
             onCommand={dispatch}
             onUndo={() => store.undo()}
             onRedo={() => store.redo()}
+            linkInteraction={linkInteraction}
           />
         </main>
 
@@ -336,6 +359,14 @@ export function EditorShell({
                 <dd>{new Date(document.updatedAt).toLocaleString()}</dd>
               </div>
             </dl>
+          </section>
+
+          <section className="inspector-section">
+            <CompatibilityDiagnosticsPanel
+              documentDiagnostics={workspaceState?.active?.markdownDocument.diagnostics}
+              linkIndex={workspaceState?.active?.linkIndex}
+              saveStatus={workspaceState?.saveStatus}
+            />
           </section>
 
           {workspaceState?.active ? (

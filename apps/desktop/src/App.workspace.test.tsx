@@ -10,7 +10,8 @@ import type {
   SaveMarkdownMindMapResult,
   WorkspaceFile,
 } from './types/markdownLifecycle';
-import type { WorkspaceSession } from './features/workspace';
+import type { WorkspaceErrorCode, WorkspaceSession } from './features/workspace';
+import { createWorkspaceLifecycleFixture } from './features/workspace/testFixtures';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -25,6 +26,7 @@ describe('App workspace lifecycle', () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    vi.unstubAllGlobals();
   });
 
   it('shows a workspace selection and creation path on first launch', async () => {
@@ -158,12 +160,176 @@ describe('App workspace lifecycle', () => {
 
     expect(await screen.findByRole('heading', { name: 'Other' })).toBeVisible();
   });
+
+  it('loads the remembered workspace and auto-opens the last Markdown file after restart', async () => {
+    const fixture = createWorkspaceLifecycleFixture();
+    const restartedContent = '# Restart\n\n## Saved child\n';
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(fixture.session({ lastOpenedFile: 'projects/restart.md' }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(
+            fixture.openResult(payload?.request?.relativePath ?? 'projects/restart.md', {
+              content: restartedContent,
+            }),
+          );
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Restart' })).toBeVisible();
+    expect(invokeMock).toHaveBeenCalledWith('openMarkdownMindMap', {
+      request: {
+        workspaceId: fixture.workspaceId,
+        relativePath: 'projects/restart.md',
+      },
+    });
+    expect(invokeMock).toHaveBeenCalledWith('remember_last_opened_file', {
+      workspaceId: fixture.workspaceId,
+      relativePath: 'projects/restart.md',
+    });
+  });
+
+  it('runs create, open, and save through local Tauri commands without browser network APIs', async () => {
+    const fixture = createWorkspaceLifecycleFixture({
+      markdownFiles: {
+        'notes/offline.md': '# Offline\n',
+      },
+    });
+    const fetchMock = vi.fn();
+    const webSocketMock = vi.fn();
+
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('WebSocket', webSocketMock);
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+      const relativePath = payload?.request?.relativePath ?? payload?.relativePath ?? 'notes/offline.md';
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(null);
+        case 'create_workspace_at_path':
+          return Promise.resolve(fixture.session({ files: [] }));
+        case 'create_markdown_document':
+          return Promise.resolve(fixture.snapshot(relativePath, { content: payload?.content }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(fixture.openResult(relativePath));
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        case 'saveMarkdownMindMap':
+          return Promise.resolve(fixture.savedResult(relativePath));
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    fireEvent.change(await screen.findByLabelText(/workspace path/i), {
+      target: { value: fixture.displayPath },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create workspace/i }));
+
+    expect(await screen.findByText(fixture.displayName)).toBeVisible();
+
+    fireEvent.change(screen.getByLabelText(/new markdown path/i), {
+      target: { value: 'notes/offline' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create markdown file/i }));
+
+    expect(await screen.findByRole('heading', { name: 'Offline' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /save markdown/i }));
+    await waitFor(() => expect(invokeMock).toHaveBeenCalledWith('saveMarkdownMindMap', expect.any(Object)));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(webSocketMock).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['external edit conflict', 'version_conflict', /changed on disk/i],
+    ['external deletion', 'file_not_found', /no longer exists/i],
+  ] satisfies Array<[string, WorkspaceErrorCode, RegExp]>)(
+    'keeps dirty content visible when save is blocked by %s',
+    async (_label, code, expectedMessage) => {
+      const fixture = createWorkspaceLifecycleFixture();
+
+      invokeMock.mockImplementation((command, args) => {
+        const payload = args as InvokePayload | undefined;
+
+        switch (command) {
+          case 'load_remembered_workspace':
+            return Promise.resolve(fixture.session({ lastOpenedFile: 'notes/plan.md' }));
+          case 'openMarkdownMindMap':
+            return Promise.resolve(fixture.openResult(payload?.request?.relativePath ?? 'notes/plan.md'));
+          case 'remember_last_opened_file':
+            return Promise.resolve();
+          case 'saveMarkdownMindMap':
+            return Promise.reject(fixture.error(code, 'notes/plan.md'));
+          default:
+            return Promise.reject(new Error(`Unexpected command: ${command}`));
+        }
+      });
+
+      render(<App />);
+
+      expect(await screen.findByRole('heading', { name: 'Plan' })).toBeVisible();
+
+      fireEvent.click(screen.getByRole('button', { name: /add child node/i }));
+      expect(screen.getByRole('textbox', { name: /rename new thought/i })).toBeVisible();
+      fireEvent.click(screen.getByRole('button', { name: /save markdown/i }));
+
+      expect(await screen.findByText(expectedMessage)).toBeVisible();
+      expect(screen.getByRole('heading', { name: 'Plan' })).toBeVisible();
+      expect(screen.getByRole('textbox', { name: /rename new thought/i })).toBeVisible();
+    },
+  );
+
+  it('prevents browser close when the active Markdown document has unsaved changes', async () => {
+    const fixture = createWorkspaceLifecycleFixture();
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(fixture.session({ lastOpenedFile: 'notes/plan.md' }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(fixture.openResult(payload?.request?.relativePath ?? 'notes/plan.md'));
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Plan' })).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /add child node/i }));
+
+    const event = new Event('beforeunload', { cancelable: true });
+    window.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(true);
+  });
 });
 
 interface InvokePayload {
   workspaceId?: string;
   relativePath?: string;
   newRelativePath?: string;
+  content?: string;
   request?: {
     workspaceId?: string;
     relativePath?: string;

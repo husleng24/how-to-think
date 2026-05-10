@@ -129,6 +129,7 @@ export interface ActiveDocumentState {
   snapshot: DocumentSnapshot;
   markdownDocument: MarkdownMindMapDocument;
   editorDocument: EditorMindMapDocument;
+  linkIndex: LinkIndexSnapshot;
   savedContentRevision: number;
   contentRevision: number;
   inFlightSave: SaveRequestState | null;
