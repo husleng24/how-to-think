@@ -1,0 +1,220 @@
+{
+  "id": "vit-105-representative-render-snapshot",
+  "schemaVersion": "spike.1",
+  "title": "How to Think Export Renderer Proof",
+  "createdFor": "VIT-105",
+  "source": {
+    "documentPath": "maps/export-renderer-proof.md",
+    "scope": "current-file"
+  },
+  "renderOptions": {
+    "nodeWidth": 248,
+    "rootNodeWidth": 292,
+    "horizontalGap": 116,
+    "verticalGap": 24,
+    "margin": 48,
+    "fontFamily": "Arial, Helvetica, sans-serif",
+    "fontSize": 13,
+    "lineHeight": 18
+  },
+  "nodes": {
+    "root": {
+      "id": "root",
+      "text": "How to Think export renderer",
+      "parentId": null,
+      "childIds": ["renderer", "formats", "deep", "quality"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "renderer": {
+      "id": "renderer",
+      "text": "SVG-first renderer shared by desktop export and CLI render",
+      "parentId": "root",
+      "childIds": ["snapshot", "text-wrap"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "snapshot": {
+      "id": "snapshot",
+      "text": "MindMapRenderSnapshot is UI-neutral JSON with node geometry inputs, collapsed state, and link tokens",
+      "parentId": "renderer",
+      "childIds": ["links", "folded"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "links": {
+      "id": "links",
+      "text": "Preserve links: [[Renderer Spike|Renderer Spike]] and [Markmap compatibility](../../contracts/cli-capability-contract.md)",
+      "parentId": "snapshot",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": [
+        {
+          "kind": "wikilink",
+          "raw": "[[Renderer Spike|Renderer Spike]]",
+          "target": "Renderer Spike",
+          "alias": "Renderer Spike"
+        },
+        {
+          "kind": "markdown",
+          "raw": "[Markmap compatibility](../../contracts/cli-capability-contract.md)",
+          "target": "../../contracts/cli-capability-contract.md",
+          "alias": "Markmap compatibility"
+        }
+      ]
+    },
+    "folded": {
+      "id": "folded",
+      "text": "Folded research branch keeps child count visible",
+      "parentId": "snapshot",
+      "childIds": ["folded-browser", "folded-print", "folded-fonts"],
+      "collapsed": true,
+      "linkTokens": []
+    },
+    "folded-browser": {
+      "id": "folded-browser",
+      "text": "Interactive browser screenshot fallback",
+      "parentId": "folded",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "folded-print": {
+      "id": "folded-print",
+      "text": "Print CSS and page-break experiments",
+      "parentId": "folded",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "folded-fonts": {
+      "id": "folded-fonts",
+      "text": "Font discovery and fallback matrix",
+      "parentId": "folded",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "text-wrap": {
+      "id": "text-wrap",
+      "text": "Long text must wrap predictably without changing graph topology or overlapping sibling branches in generated output",
+      "parentId": "renderer",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "formats": {
+      "id": "formats",
+      "text": "Export formats",
+      "parentId": "root",
+      "childIds": ["svg", "png", "pdf"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "svg": {
+      "id": "svg",
+      "text": "SVG is the canonical export artifact and also the converter input",
+      "parentId": "formats",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "png": {
+      "id": "png",
+      "text": "PNG rasterization uses a headless converter with explicit dimensions and system-font loading",
+      "parentId": "formats",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "pdf": {
+      "id": "pdf",
+      "text": "PDF first version should prefer vector output when the emitted SVG subset is supported; oversized maps need fit-to-page warnings",
+      "parentId": "formats",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep": {
+      "id": "deep",
+      "text": "Deep map behavior",
+      "parentId": "root",
+      "childIds": ["deep-1"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep-1": {
+      "id": "deep-1",
+      "text": "Level 1",
+      "parentId": "deep",
+      "childIds": ["deep-2"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep-2": {
+      "id": "deep-2",
+      "text": "Level 2",
+      "parentId": "deep-1",
+      "childIds": ["deep-3"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep-3": {
+      "id": "deep-3",
+      "text": "Level 3",
+      "parentId": "deep-2",
+      "childIds": ["deep-4"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep-4": {
+      "id": "deep-4",
+      "text": "Level 4",
+      "parentId": "deep-3",
+      "childIds": ["deep-5"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "deep-5": {
+      "id": "deep-5",
+      "text": "Level 5 with a long terminal label that verifies width growth, edge routing, and text wrapping",
+      "parentId": "deep-4",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "quality": {
+      "id": "quality",
+      "text": "Quality checks",
+      "parentId": "root",
+      "childIds": ["fonts", "dimensions", "large-map"],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "fonts": {
+      "id": "fonts",
+      "text": "Fonts should use bundled or declared fallbacks, not implicit browser-only fonts",
+      "parentId": "quality",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "dimensions": {
+      "id": "dimensions",
+      "text": "Output dimensions are derived from layout bounds plus margin",
+      "parentId": "quality",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    },
+    "large-map": {
+      "id": "large-map",
+      "text": "Large maps should start with single-SVG export and add tiling or pagination only after measured regressions",
+      "parentId": "quality",
+      "childIds": [],
+      "collapsed": false,
+      "linkTokens": []
+    }
+  },
+  "rootNodeId": "root"
+}

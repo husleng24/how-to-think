@@ -1,0 +1,15 @@
+{
+  "name": "how-to-think-export-renderer-spike",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Headless SVG-first export proof for How to Think mind map render snapshots.",
+  "scripts": {
+    "render": "node src/render-export-proof.mjs"
+  },
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "pdfkit": "^0.15.0",
+    "svg-to-pdfkit": "^0.1.8"
+  }
+}

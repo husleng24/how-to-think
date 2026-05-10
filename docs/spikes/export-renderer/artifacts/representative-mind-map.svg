@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2528" height="1208" viewBox="0 0 2528 1208" role="img" aria-labelledby="title desc">
+  <title id="title">How to Think Export Renderer Proof</title>
+  <desc id="desc">Representative mind map export proof with links, collapsed branches, long text, and deep nesting.</desc>
+  <rect x="0" y="0" width="2528" height="1208" fill="#f7f9fc" />
+  <g id="edges">
+<path d="M 1024.0 135.0 C 1084.3 135.0, 1084.3 80.0, 1140.0 80.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 1024.0 135.0 C 1084.3 135.0, 1084.3 179.0, 1140.0 179.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 197.0 C 720.3 197.0, 720.3 135.0, 776.0 135.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 197.0 C 720.3 197.0, 720.3 296.0, 776.0 296.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 340.0 604.0 C 377.4 604.0, 377.4 197.0, 412.0 197.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 544.0 C 720.3 544.0, 720.3 411.0, 776.0 411.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 544.0 C 720.3 544.0, 720.3 526.0, 776.0 526.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 544.0 C 720.3 544.0, 720.3 659.0, 776.0 659.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 340.0 604.0 C 377.4 604.0, 377.4 544.0, 412.0 544.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 2116.0 792.0 C 2176.3 792.0, 2176.3 792.0, 2232.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 1752.0 792.0 C 1812.3 792.0, 1812.3 792.0, 1868.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 1388.0 792.0 C 1448.3 792.0, 1448.3 792.0, 1504.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 1024.0 792.0 C 1084.3 792.0, 1084.3 792.0, 1140.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 792.0 C 720.3 792.0, 720.3 792.0, 776.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 340.0 604.0 C 377.4 604.0, 377.4 792.0, 412.0 792.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 1013.0 C 720.3 1013.0, 720.3 907.0, 776.0 907.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 1013.0 C 720.3 1013.0, 720.3 1004.0, 776.0 1004.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 660.0 1013.0 C 720.3 1013.0, 720.3 1110.0, 776.0 1110.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+<path d="M 340.0 604.0 C 377.4 604.0, 377.4 1013.0, 412.0 1013.0" fill="none" stroke="#8aa0b8" stroke-width="2" stroke-linecap="round" />
+  </g>
+  <g id="nodes">
+<g id="node-root">
+    <rect x="48.0" y="573.0" width="292" height="62.0" rx="8" fill="#153a5b" stroke="#0d263d" stroke-width="1.3" />
+    <text x="62.0" y="597.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#ffffff" xml:space="preserve"><tspan>How</tspan><tspan> </tspan><tspan>to</tspan><tspan> </tspan><tspan>Think</tspan><tspan> </tspan><tspan>export</tspan><tspan> </tspan><tspan>renderer</tspan></text>
+  </g>
+<g id="node-renderer">
+    <rect x="412.0" y="165.0" width="248" height="64.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="426.0" y="189.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>SVG-first</tspan><tspan> </tspan><tspan>renderer</tspan><tspan> </tspan><tspan>shared</tspan><tspan> </tspan><tspan>by</tspan></text><text x="426.0" y="207.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>desktop</tspan><tspan> </tspan><tspan>export</tspan><tspan> </tspan><tspan>and</tspan><tspan> </tspan><tspan>CLI</tspan><tspan> </tspan><tspan>render</tspan></text>
+  </g>
+<g id="node-snapshot">
+    <rect x="776.0" y="85.0" width="248" height="100.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="109.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>MindMapRenderSnapshot</tspan><tspan> </tspan><tspan>is</tspan></text><text x="790.0" y="127.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>UI-neutral</tspan><tspan> </tspan><tspan>JSON</tspan><tspan> </tspan><tspan>with</tspan><tspan> </tspan><tspan>node</tspan></text><text x="790.0" y="145.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>geometry</tspan><tspan> </tspan><tspan>inputs,</tspan><tspan> </tspan><tspan>collapsed</tspan></text><text x="790.0" y="163.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>state,</tspan><tspan> </tspan><tspan>and</tspan><tspan> </tspan><tspan>link</tspan><tspan> </tspan><tspan>tokens</tspan></text>
+  </g>
+<g id="node-links">
+    <rect x="1140.0" y="48.0" width="248" height="64.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="1154.0" y="72.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Preserve</tspan><tspan> </tspan><tspan>links:</tspan><tspan> </tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="Renderer Spike">Renderer</tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="Renderer Spike"> </tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="Renderer Spike">Spike</tspan></text><text x="1154.0" y="90.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>and</tspan><tspan> </tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="../../contracts/cli-capability-contract.md">Markmap</tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="../../contracts/cli-capability-contract.md"> </tspan><tspan fill="#075da8" text-decoration="underline" data-link-target="../../contracts/cli-capability-contract.md">compatibility</tspan></text>
+  </g>
+<g id="node-folded">
+    <rect x="1140.0" y="136.0" width="248" height="86.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="1154.0" y="160.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Folded</tspan><tspan> </tspan><tspan>research</tspan><tspan> </tspan><tspan>branch</tspan><tspan> </tspan><tspan>keeps</tspan></text><text x="1154.0" y="178.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>child</tspan><tspan> </tspan><tspan>count</tspan><tspan> </tspan><tspan>visible</tspan></text>
+    <g>
+        <rect x="1154.0" y="196.0" width="78" height="18" rx="9" fill="#e9f4ff" stroke="#9dc6eb" />
+        <text x="1165.0" y="209.0" font-family="Arial, Helvetica, sans-serif" font-size="11" fill="#5d6c7c">+3 hidden</text>
+      </g>
+  </g>
+<g id="node-text-wrap">
+    <rect x="776.0" y="246.0" width="248" height="100.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="270.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Long</tspan><tspan> </tspan><tspan>text</tspan><tspan> </tspan><tspan>must</tspan><tspan> </tspan><tspan>wrap</tspan><tspan> </tspan><tspan>predictably</tspan></text><text x="790.0" y="288.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>without</tspan><tspan> </tspan><tspan>changing</tspan><tspan> </tspan><tspan>graph</tspan><tspan> </tspan><tspan>topology</tspan></text><text x="790.0" y="306.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>or</tspan><tspan> </tspan><tspan>overlapping</tspan><tspan> </tspan><tspan>sibling</tspan><tspan> </tspan><tspan>branches</tspan></text><text x="790.0" y="324.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>in</tspan><tspan> </tspan><tspan>generated</tspan><tspan> </tspan><tspan>output</tspan></text>
+  </g>
+<g id="node-formats">
+    <rect x="412.0" y="513.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="426.0" y="537.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Export</tspan><tspan> </tspan><tspan>formats</tspan></text>
+  </g>
+<g id="node-svg">
+    <rect x="776.0" y="370.0" width="248" height="82.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="394.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>SVG</tspan><tspan> </tspan><tspan>is</tspan><tspan> </tspan><tspan>the</tspan><tspan> </tspan><tspan>canonical</tspan><tspan> </tspan><tspan>export</tspan></text><text x="790.0" y="412.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>artifact</tspan><tspan> </tspan><tspan>and</tspan><tspan> </tspan><tspan>also</tspan><tspan> </tspan><tspan>the</tspan><tspan> </tspan><tspan>converter</tspan></text><text x="790.0" y="430.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>input</tspan></text>
+  </g>
+<g id="node-png">
+    <rect x="776.0" y="476.0" width="248" height="100.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="500.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>PNG</tspan><tspan> </tspan><tspan>rasterization</tspan><tspan> </tspan><tspan>uses</tspan><tspan> </tspan><tspan>a</tspan></text><text x="790.0" y="518.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>headless</tspan><tspan> </tspan><tspan>converter</tspan><tspan> </tspan><tspan>with</tspan></text><text x="790.0" y="536.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>explicit</tspan><tspan> </tspan><tspan>dimensions</tspan><tspan> </tspan><tspan>and</tspan></text><text x="790.0" y="554.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>system-font</tspan><tspan> </tspan><tspan>loading</tspan></text>
+  </g>
+<g id="node-pdf">
+    <rect x="776.0" y="600.0" width="248" height="118.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="624.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>PDF</tspan><tspan> </tspan><tspan>first</tspan><tspan> </tspan><tspan>version</tspan><tspan> </tspan><tspan>should</tspan><tspan> </tspan><tspan>prefer</tspan></text><text x="790.0" y="642.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>vector</tspan><tspan> </tspan><tspan>output</tspan><tspan> </tspan><tspan>when</tspan><tspan> </tspan><tspan>the</tspan><tspan> </tspan><tspan>emitted</tspan></text><text x="790.0" y="660.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>SVG</tspan><tspan> </tspan><tspan>subset</tspan><tspan> </tspan><tspan>is</tspan><tspan> </tspan><tspan>supported;</tspan></text><text x="790.0" y="678.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>oversized</tspan><tspan> </tspan><tspan>maps</tspan><tspan> </tspan><tspan>need</tspan><tspan> </tspan><tspan>fit-to-page</tspan></text><text x="790.0" y="696.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>warnings</tspan></text>
+  </g>
+<g id="node-deep">
+    <rect x="412.0" y="761.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="426.0" y="785.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Deep</tspan><tspan> </tspan><tspan>map</tspan><tspan> </tspan><tspan>behavior</tspan></text>
+  </g>
+<g id="node-deep-1">
+    <rect x="776.0" y="761.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="785.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Level</tspan><tspan> </tspan><tspan>1</tspan></text>
+  </g>
+<g id="node-deep-2">
+    <rect x="1140.0" y="761.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="1154.0" y="785.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Level</tspan><tspan> </tspan><tspan>2</tspan></text>
+  </g>
+<g id="node-deep-3">
+    <rect x="1504.0" y="761.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="1518.0" y="785.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Level</tspan><tspan> </tspan><tspan>3</tspan></text>
+  </g>
+<g id="node-deep-4">
+    <rect x="1868.0" y="761.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="1882.0" y="785.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Level</tspan><tspan> </tspan><tspan>4</tspan></text>
+  </g>
+<g id="node-deep-5">
+    <rect x="2232.0" y="742.0" width="248" height="100.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="2246.0" y="766.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Level</tspan><tspan> </tspan><tspan>5</tspan><tspan> </tspan><tspan>with</tspan><tspan> </tspan><tspan>a</tspan><tspan> </tspan><tspan>long</tspan><tspan> </tspan><tspan>terminal</tspan></text><text x="2246.0" y="784.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>label</tspan><tspan> </tspan><tspan>that</tspan><tspan> </tspan><tspan>verifies</tspan><tspan> </tspan><tspan>width</tspan></text><text x="2246.0" y="802.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>growth,</tspan><tspan> </tspan><tspan>edge</tspan><tspan> </tspan><tspan>routing,</tspan><tspan> </tspan><tspan>and</tspan><tspan> </tspan><tspan>text</tspan></text><text x="2246.0" y="820.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>wrapping</tspan></text>
+  </g>
+<g id="node-quality">
+    <rect x="412.0" y="982.0" width="248" height="62.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="426.0" y="1006.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Quality</tspan><tspan> </tspan><tspan>checks</tspan></text>
+  </g>
+<g id="node-fonts">
+    <rect x="776.0" y="866.0" width="248" height="82.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="890.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Fonts</tspan><tspan> </tspan><tspan>should</tspan><tspan> </tspan><tspan>use</tspan><tspan> </tspan><tspan>bundled</tspan><tspan> </tspan><tspan>or</tspan></text><text x="790.0" y="908.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>declared</tspan><tspan> </tspan><tspan>fallbacks,</tspan><tspan> </tspan><tspan>not</tspan></text><text x="790.0" y="926.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>implicit</tspan><tspan> </tspan><tspan>browser-only</tspan><tspan> </tspan><tspan>fonts</tspan></text>
+  </g>
+<g id="node-dimensions">
+    <rect x="776.0" y="972.0" width="248" height="64.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="996.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Output</tspan><tspan> </tspan><tspan>dimensions</tspan><tspan> </tspan><tspan>are</tspan><tspan> </tspan><tspan>derived</tspan></text><text x="790.0" y="1014.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>from</tspan><tspan> </tspan><tspan>layout</tspan><tspan> </tspan><tspan>bounds</tspan><tspan> </tspan><tspan>plus</tspan><tspan> </tspan><tspan>margin</tspan></text>
+  </g>
+<g id="node-large-map">
+    <rect x="776.0" y="1060.0" width="248" height="100.0" rx="8" fill="#ffffff" stroke="#c8d3df" stroke-width="1.3" />
+    <text x="790.0" y="1084.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>Large</tspan><tspan> </tspan><tspan>maps</tspan><tspan> </tspan><tspan>should</tspan><tspan> </tspan><tspan>start</tspan><tspan> </tspan><tspan>with</tspan></text><text x="790.0" y="1102.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>single-SVG</tspan><tspan> </tspan><tspan>export</tspan><tspan> </tspan><tspan>and</tspan><tspan> </tspan><tspan>add</tspan><tspan> </tspan><tspan>tiling</tspan></text><text x="790.0" y="1120.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>or</tspan><tspan> </tspan><tspan>pagination</tspan><tspan> </tspan><tspan>only</tspan><tspan> </tspan><tspan>after</tspan></text><text x="790.0" y="1138.0" font-family="Arial, Helvetica, sans-serif" font-size="13" fill="#1d2b3a" xml:space="preserve"><tspan>measured</tspan><tspan> </tspan><tspan>regressions</tspan></text>
+  </g>
+  </g>
+</svg>
