@@ -20,6 +20,7 @@ pub(crate) mod workspace_test_fixtures;
 pub fn run() {
     tauri::Builder::default()
         .manage(fs_watch::WorkspaceWatchState::default())
+        .manage(ai::runner::AiRuntimeState::default())
         .invoke_handler(tauri::generate_handler![
             commands::load_remembered_workspace,
             commands::select_workspace_at_path,
@@ -51,6 +52,9 @@ pub fn run() {
             ai::providers::select_ai_provider,
             ai::providers::remove_ai_provider,
             ai::providers::check_ai_provider_health,
+            ai::runner::send_ai_conversation_message,
+            ai::runner::cancel_ai_run,
+            ai::runner::list_ai_sessions,
         ])
         .run(tauri::generate_context!())
         .expect("error while running How to Think desktop shell");

@@ -470,7 +470,7 @@ pub fn check_provider_health(provider: &AiProviderConfig) -> AiProviderHealthSta
     }
 }
 
-fn provider_store(app: &AppHandle) -> Result<AiProviderStore, AiProviderError> {
+pub(crate) fn provider_store(app: &AppHandle) -> Result<AiProviderStore, AiProviderError> {
     let settings_dir = app.path().app_config_dir().map_err(|error| {
         AiProviderError::new(
             AiProviderErrorCode::RuntimeUnavailable,
