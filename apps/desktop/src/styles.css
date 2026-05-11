@@ -525,6 +525,12 @@ button {
   line-height: 1.45;
 }
 
+.git-state-title {
+  margin: 8px 0 0;
+  color: #202225;
+  font-weight: 800;
+}
+
 .metadata-list {
   display: grid;
   gap: 10px;

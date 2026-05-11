@@ -293,6 +293,25 @@ export interface GitOperationPermissionPolicy {
   blockedBy?: GitOperationErrorCode;
 }
 
+export type GitBlockedStateKind =
+  | 'merge_conflict'
+  | 'detached_head'
+  | 'repository_corrupt'
+  | 'git_unavailable'
+  | 'permission_denied'
+  | 'stale_repository_state'
+  | 'stale_file_state';
+
+export interface GitBlockedState {
+  kind: GitBlockedStateKind;
+  operation: GitServiceOperation;
+  code?: GitOperationErrorCode;
+  title: string;
+  detail: string;
+  recoverable: boolean;
+  relativePath?: WorkspaceRelativePath;
+}
+
 export interface GitPathValidationError {
   code: Extract<GitOperationErrorCode, 'permission_denied'>;
   message: string;

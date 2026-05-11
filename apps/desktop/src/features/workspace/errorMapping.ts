@@ -72,6 +72,25 @@ export function mapWorkspaceError(error: unknown): UserMessage {
         detail: 'Refresh Git status and try the restore again.',
         relativePath,
       };
+    case 'detached_head':
+      return {
+        title: 'Detached HEAD',
+        detail: 'Check out a branch before creating snapshots or restoring files.',
+        relativePath,
+      };
+    case 'git_unavailable':
+      return {
+        title: 'Git unavailable',
+        detail: 'The desktop Git backend is unavailable for this workspace.',
+        relativePath,
+      };
+    case 'repository_corrupt':
+    case 'bare_repository':
+      return {
+        title: 'Repository unavailable',
+        detail: 'The Git repository metadata cannot be read safely.',
+        relativePath,
+      };
     case 'invalid_ref':
     case 'file_not_in_history':
       return {

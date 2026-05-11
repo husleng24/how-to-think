@@ -1,8 +1,12 @@
 import type {
+  GitBlockedState,
+  GitBlockedStateKind,
   GitOperationAccess,
+  GitOperationError,
   GitOperationErrorCode,
   GitOperationPermissionPolicy,
   GitPathValidationResult,
+  GitRepositoryState,
   GitRepositoryStateKind,
   GitRepositoryStateToken,
   GitRequestValidationIssue,
@@ -130,7 +134,7 @@ export const GIT_SERVICE_METHODS = [
     operation: 'refresh',
     commandName: 'git_refresh',
     requestType: '{ workspaceId }',
-    resultType: 'GitRepositoryState',
+    resultType: 'GitStatusSummary',
     mutability: 'read_only',
     requiresWorkspace: true,
     requiresExpectedRepoToken: false,
@@ -324,6 +328,37 @@ export function gitMethodRequiresExpectedRepoToken(operation: GitServiceOperatio
     ?.requiresExpectedRepoToken ?? false;
 }
 
+export function gitBlockedStateForRepository(
+  repositoryState: GitRepositoryState | null | undefined,
+  operation: GitServiceOperation,
+): GitBlockedState | null {
+  if (!repositoryState) {
+    return null;
+  }
+
+  const kind = blockedKindForRepositoryState(repositoryState.state);
+  if (!kind) {
+    return null;
+  }
+
+  return buildGitBlockedState(kind, operation, repositoryState.blockedReason ?? undefined);
+}
+
+export function gitBlockedStateFromError(
+  error: GitOperationError | null | undefined,
+): GitBlockedState | null {
+  if (!error) {
+    return null;
+  }
+
+  const kind = blockedKindForErrorCode(error.code);
+  if (!kind) {
+    return null;
+  }
+
+  return buildGitBlockedState(kind, error.operation, error.code, error.relativePath, error.message);
+}
+
 function buildGitOperationPolicy(
   state: GitRepositoryStateKind,
   operation: GitServiceOperation,
@@ -422,6 +457,124 @@ function policy(
 
 function gitPathDenied(message: string): GitPathValidationResult {
   return { ok: false, error: { code: 'permission_denied', message } };
+}
+
+function blockedKindForRepositoryState(
+  state: GitRepositoryStateKind,
+): GitBlockedStateKind | null {
+  if (state === 'merge_conflict') {
+    return 'merge_conflict';
+  }
+
+  if (state === 'detached_head') {
+    return 'detached_head';
+  }
+
+  if (state === 'repository_corrupt' || state === 'bare_repository') {
+    return 'repository_corrupt';
+  }
+
+  if (state === 'git_unavailable') {
+    return 'git_unavailable';
+  }
+
+  if (state === 'permission_denied') {
+    return 'permission_denied';
+  }
+
+  return null;
+}
+
+function blockedKindForErrorCode(code: GitOperationErrorCode): GitBlockedStateKind | null {
+  if (code === 'external_state_changed') {
+    return 'stale_repository_state';
+  }
+
+  if (code === 'restore_conflict') {
+    return 'stale_file_state';
+  }
+
+  if (code === 'merge_conflict') {
+    return 'merge_conflict';
+  }
+
+  if (code === 'detached_head') {
+    return 'detached_head';
+  }
+
+  if (code === 'repository_corrupt' || code === 'bare_repository') {
+    return 'repository_corrupt';
+  }
+
+  if (code === 'git_unavailable') {
+    return 'git_unavailable';
+  }
+
+  if (code === 'permission_denied') {
+    return 'permission_denied';
+  }
+
+  return null;
+}
+
+function buildGitBlockedState(
+  kind: GitBlockedStateKind,
+  operation: GitServiceOperation,
+  code?: GitOperationErrorCode,
+  relativePath?: string,
+  fallbackDetail?: string,
+): GitBlockedState {
+  const copy = gitBlockedStateCopy(kind);
+
+  return {
+    kind,
+    operation,
+    title: copy.title,
+    detail: fallbackDetail || copy.detail,
+    recoverable: true,
+    relativePath,
+    ...(code ? { code } : {}),
+  };
+}
+
+function gitBlockedStateCopy(kind: GitBlockedStateKind): { title: string; detail: string } {
+  switch (kind) {
+    case 'merge_conflict':
+      return {
+        title: 'Merge conflict active',
+        detail: 'Resolve the Git conflict before creating snapshots or restoring files.',
+      };
+    case 'detached_head':
+      return {
+        title: 'Detached HEAD',
+        detail: 'Check out a branch before creating snapshots or restoring files.',
+      };
+    case 'repository_corrupt':
+      return {
+        title: 'Repository unavailable',
+        detail: 'The Git repository metadata cannot be read safely.',
+      };
+    case 'git_unavailable':
+      return {
+        title: 'Git unavailable',
+        detail: 'The desktop Git backend is unavailable for this workspace.',
+      };
+    case 'permission_denied':
+      return {
+        title: 'Permission needed',
+        detail: 'The repository or workspace cannot be read or written with current permissions.',
+      };
+    case 'stale_repository_state':
+      return {
+        title: 'Git state changed',
+        detail: 'Refresh Git status before retrying this operation.',
+      };
+    case 'stale_file_state':
+      return {
+        title: 'File changed',
+        detail: 'Refresh or reopen the Markdown file before retrying this operation.',
+      };
+  }
 }
 
 function hasControlCharacter(path: string): boolean {

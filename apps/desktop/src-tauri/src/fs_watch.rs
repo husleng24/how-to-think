@@ -1,5 +1,7 @@
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::file_index::index_markdown_files;
+use crate::git_contracts::{is_repository_token_stale, GitStatusSummary};
+use crate::git_service;
 use crate::models::{
     DocumentExternalChangeStatus, DocumentExternalChangeType, ExternalChangeBatch,
     ExternalChangeEvent, ExternalChangeKind, ExternalChangeSource, FileVersion, WorkspaceFile,
@@ -9,6 +11,7 @@ use crate::path_guard::validate_workspace_relative_path;
 use crate::time_utils::now_iso;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter};
 
@@ -32,6 +35,7 @@ struct ActiveWorkspaceWatch {
 pub struct WorkspaceChangeDetector {
     record: WorkspaceRecord,
     files: BTreeMap<WorkspaceRelativePath, WorkspaceFile>,
+    git_status: Option<GitStatusSummary>,
 }
 
 impl WorkspaceWatchState {
@@ -47,8 +51,12 @@ impl WorkspaceWatchState {
         let mut watch_error = None;
 
         let watcher = match RecommendedWatcher::new(
-            move |result| match result {
-                Ok(_) => {
+            move |result: notify::Result<notify::Event>| match result {
+                Ok(event) => {
+                    let repository_metadata_hint = event
+                        .paths
+                        .iter()
+                        .any(|path| is_repository_metadata_path(path));
                     let refresh = detector_for_callback
                         .lock()
                         .map_err(|_| poisoned_watch_error())
@@ -57,7 +65,11 @@ impl WorkspaceWatchState {
                         });
 
                     match refresh {
-                        Ok(batch) if !batch.events.is_empty() => {
+                        Ok(batch)
+                            if !batch.events.is_empty()
+                                || batch.repository_state_changed
+                                || repository_metadata_hint =>
+                        {
                             let _ = app_for_callback.emit(EXTERNAL_CHANGE_EVENT, batch);
                         }
                         Ok(_) => {}
@@ -160,8 +172,13 @@ impl WorkspaceChangeDetector {
             &record.canonical_root,
             record.info.case_sensitive,
         )?);
+        let git_status = git_service::refresh_git_state(&record).ok();
 
-        Ok(Self { record, files })
+        Ok(Self {
+            record,
+            files,
+            git_status,
+        })
     }
 
     pub fn refresh(
@@ -174,14 +191,20 @@ impl WorkspaceChangeDetector {
             &self.record.canonical_root,
             self.record.info.case_sensitive,
         )?);
+        let new_git_status = git_service::refresh_git_state(&self.record).ok();
+        let repository_state_changed =
+            git_status_changed(self.git_status.as_ref(), new_git_status.as_ref());
         let events = diff_files(&self.record.info.id, &self.files, &new_files, source);
         self.files = new_files;
+        self.git_status = new_git_status;
 
         Ok(ExternalChangeBatch {
             workspace_id: self.record.info.id.clone(),
             source,
             events,
             files: self.current_files(),
+            repository_state_changed,
+            git_status: self.git_status.clone(),
             detected_at: now_iso(),
             watcher_active,
             watch_error,
@@ -199,6 +222,8 @@ impl WorkspaceChangeDetector {
             source,
             events: Vec::new(),
             files: self.current_files(),
+            repository_state_changed: false,
+            git_status: self.git_status.clone(),
             detected_at: now_iso(),
             watcher_active,
             watch_error,
@@ -208,6 +233,61 @@ impl WorkspaceChangeDetector {
     fn current_files(&self) -> Vec<WorkspaceFile> {
         self.files.values().cloned().collect()
     }
+}
+
+fn git_status_changed(
+    previous: Option<&GitStatusSummary>,
+    current: Option<&GitStatusSummary>,
+) -> bool {
+    let (previous, current) = match (previous, current) {
+        (None, None) => return false,
+        (Some(_), None) | (None, Some(_)) => return true,
+        (Some(previous), Some(current)) => (previous, current),
+    };
+
+    if previous.repository_state.state != current.repository_state.state
+        || previous.repository_state.branch_name != current.repository_state.branch_name
+        || previous.repository_state.head_oid != current.repository_state.head_oid
+        || previous.repository_state.blocked_reason != current.repository_state.blocked_reason
+    {
+        return true;
+    }
+
+    match (previous.token.as_ref(), current.token.as_ref()) {
+        (None, None) => false,
+        _ => is_repository_token_stale(previous.token.as_ref(), current.token.as_ref()),
+    }
+}
+
+fn is_repository_metadata_path(path: &Path) -> bool {
+    let mut components = path
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy());
+
+    while let Some(component) = components.next() {
+        if component != ".git" {
+            continue;
+        }
+
+        let Some(next) = components.next() else {
+            return true;
+        };
+
+        return matches!(
+            next.as_ref(),
+            "HEAD"
+                | "index"
+                | "packed-refs"
+                | "MERGE_HEAD"
+                | "CHERRY_PICK_HEAD"
+                | "REVERT_HEAD"
+                | "rebase-apply"
+                | "rebase-merge"
+                | "refs"
+        );
+    }
+
+    false
 }
 
 pub fn document_external_change_status(
@@ -445,9 +525,29 @@ mod tests {
     use super::*;
     use crate::workspace::validate_workspace_root;
     use std::fs;
+    use std::process::Command;
 
     fn record(root: &std::path::Path) -> WorkspaceRecord {
         validate_workspace_root(root, WorkspaceOperation::SelectWorkspace).unwrap()
+    }
+
+    fn git(cwd: &std::path::Path, args: &[&str]) {
+        let output = Command::new("git")
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn configure_identity(cwd: &std::path::Path) {
+        git(cwd, &["config", "user.name", "How To Think Test"]);
+        git(cwd, &["config", "user.email", "test@example.invalid"]);
     }
 
     #[test]
@@ -520,6 +620,7 @@ mod tests {
 
         let baseline = state.refresh(record.clone()).unwrap();
         assert!(baseline.events.is_empty());
+        assert!(!baseline.repository_state_changed);
         assert!(!baseline.watcher_active);
 
         fs::write(temp.path().join("created.md"), "created").unwrap();
@@ -529,6 +630,62 @@ mod tests {
         assert_eq!(batch.events[0].kind, ExternalChangeKind::Created);
         assert_eq!(batch.events[0].relative_path, "created.md");
         assert!(!batch.watcher_active);
+    }
+
+    #[test]
+    fn refresh_detects_git_index_change_without_markdown_file_events() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        git(temp.path(), &["add", "idea.md"]);
+        git(temp.path(), &["commit", "--quiet", "-m", "Initial"]);
+
+        let record = record(temp.path());
+        let mut detector = WorkspaceChangeDetector::new(record).unwrap();
+        let baseline = detector.baseline(ExternalChangeSource::Refresh, false, None);
+        let baseline_token = baseline
+            .git_status
+            .as_ref()
+            .and_then(|status| status.token.clone());
+
+        fs::write(temp.path().join("scratch.txt"), "not markdown").unwrap();
+        git(temp.path(), &["add", "scratch.txt"]);
+
+        let batch = detector
+            .refresh(ExternalChangeSource::Refresh, false, None)
+            .unwrap();
+        let refreshed_token = batch
+            .git_status
+            .as_ref()
+            .and_then(|status| status.token.clone());
+
+        assert!(batch.events.is_empty());
+        assert!(batch.repository_state_changed);
+        assert!(baseline_token.is_some());
+        assert_ne!(
+            baseline_token.as_ref().map(|token| token.token.as_str()),
+            refreshed_token.as_ref().map(|token| token.token.as_str())
+        );
+    }
+
+    #[test]
+    fn normalizes_repository_metadata_watch_paths() {
+        assert!(is_repository_metadata_path(std::path::Path::new(
+            "workspace/.git/HEAD"
+        )));
+        assert!(is_repository_metadata_path(std::path::Path::new(
+            "workspace/.git/index"
+        )));
+        assert!(is_repository_metadata_path(std::path::Path::new(
+            "workspace/.git/refs/heads/main"
+        )));
+        assert!(is_repository_metadata_path(std::path::Path::new(
+            "workspace/.git/MERGE_HEAD"
+        )));
+        assert!(!is_repository_metadata_path(std::path::Path::new(
+            "workspace/notes/idea.md"
+        )));
     }
 
     #[test]

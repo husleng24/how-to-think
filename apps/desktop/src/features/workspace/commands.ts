@@ -12,10 +12,11 @@ import type {
   WorkspaceId,
   WorkspaceRelativePath,
 } from '../../types/markdownLifecycle';
-import type { GitRestoreResult } from '../git-service';
+import type { GitRestoreResult, GitStatusSummary } from '../git-service';
 import type {
   DeleteDocumentResult,
   DocumentExternalChangeStatus,
+  ExternalChangeBatch,
   OpenedDocumentPayload,
   RenameDocumentResult,
   WorkspaceCommands,
@@ -37,6 +38,22 @@ export const tauriWorkspaceCommands: WorkspaceCommands = {
 
   refreshWorkspaceFiles(workspaceId) {
     return invoke<WorkspaceFile[]>('refresh_workspace_files', { workspaceId });
+  },
+
+  refreshGitState(workspaceId) {
+    return invoke<GitStatusSummary>('git_refresh', { workspaceId });
+  },
+
+  startWorkspaceChangeDetection(workspaceId) {
+    return invoke<ExternalChangeBatch>('start_workspace_change_detection', { workspaceId });
+  },
+
+  refreshWorkspaceExternalChanges(workspaceId) {
+    return invoke<ExternalChangeBatch>('refresh_workspace_external_changes', { workspaceId });
+  },
+
+  stopWorkspaceChangeDetection(workspaceId) {
+    return invoke<void>('stop_workspace_change_detection', { workspaceId });
   },
 
   createMarkdownDocument(workspaceId, relativePath, content) {

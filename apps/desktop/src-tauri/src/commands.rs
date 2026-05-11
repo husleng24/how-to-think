@@ -474,6 +474,24 @@ pub fn git_status(
 }
 
 #[tauri::command]
+pub fn git_refresh(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<GitStatusSummary, GitOperationError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Refresh, error))?;
+    git_service::refresh_git_state(&record)
+}
+
+#[tauri::command]
+pub fn refresh_git_state(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<GitStatusSummary, GitOperationError> {
+    git_refresh(app, workspace_id)
+}
+
+#[tauri::command]
 pub fn git_create_snapshot(
     app: AppHandle,
     request: GitSnapshotRequest,

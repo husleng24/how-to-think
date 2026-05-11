@@ -84,6 +84,8 @@ pub fn run() {
             commands::git_detect_repository,
             commands::git_init_repository,
             commands::git_status,
+            commands::git_refresh,
+            commands::refresh_git_state,
             commands::git_create_snapshot,
             commands::git_history,
             commands::git_diff,

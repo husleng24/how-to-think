@@ -1,10 +1,11 @@
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode};
+use crate::file_index::index_markdown_files;
 use crate::git_contracts::{
     is_repository_token_stale, validate_git_workspace_relative_path, GitAuthorIdentity,
     GitBackendInfo, GitBackendKind, GitDiffContentKind, GitDiffFile, GitDiffFileChangeKind,
     GitDiffHunk, GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffRequest, GitDiffResult,
-    GitDiffTruncation, GitHistoryEntry, GitHistoryRequest, GitOperationError,
+    GitDiffTruncation, GitExpectedFileState, GitHistoryEntry, GitHistoryRequest, GitOperationError,
     GitOperationErrorCode, GitRepositoryState, GitRepositoryStateKind, GitRepositoryStateToken,
     GitRepositoryWarning, GitRestoreRequest, GitRestoreResult, GitServiceOperation,
     GitSnapshotRequest, GitSnapshotResult, GitStatusChangeKind, GitStatusCounts, GitStatusEntry,
@@ -45,6 +46,10 @@ pub fn enable_git_for_workspace(
 
 pub fn get_git_status(record: &WorkspaceRecord) -> Result<GitStatusSummary, GitOperationError> {
     GitRepositoryService::default().status(record)
+}
+
+pub fn refresh_git_state(record: &WorkspaceRecord) -> Result<GitStatusSummary, GitOperationError> {
+    GitRepositoryService::default().refresh_state(record)
 }
 
 pub fn create_snapshot(
@@ -154,6 +159,29 @@ impl GitRepositoryService {
         self.status_for_state(record, repository_state)
     }
 
+    fn refresh_state(
+        &self,
+        record: &WorkspaceRecord,
+    ) -> Result<GitStatusSummary, GitOperationError> {
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::Refresh)?;
+        match self.status_for_state(record, repository_state.clone()) {
+            Ok(status) => Ok(status),
+            Err(error)
+                if matches!(
+                    error.code,
+                    GitOperationErrorCode::GitUnavailable
+                        | GitOperationErrorCode::RepositoryCorrupt
+                        | GitOperationErrorCode::BareRepository
+                        | GitOperationErrorCode::PermissionDenied
+                        | GitOperationErrorCode::NotRepository
+                ) =>
+            {
+                Ok(empty_status_summary(record, repository_state))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     fn create_snapshot(
         &self,
         record: &WorkspaceRecord,
@@ -185,6 +213,7 @@ impl GitRepositoryService {
                 true,
             ));
         }
+        ensure_snapshot_file_states(record, &request.expected_file_states)?;
 
         let context = repository_context(record, &repository_state, GitServiceOperation::Snapshot)?;
         let status = self.status_for_state(record, repository_state.clone())?;
@@ -1631,6 +1660,40 @@ fn historical_blob_error(error: GitOperationError, relative_path: &str) -> GitOp
     error
 }
 
+fn workspace_error_to_snapshot_error(error: WorkspaceError) -> GitOperationError {
+    let code = match error.code {
+        WorkspaceErrorCode::WorkspaceUnwritable | WorkspaceErrorCode::PermissionDenied => {
+            GitOperationErrorCode::PermissionDenied
+        }
+        WorkspaceErrorCode::InvalidRelativePath | WorkspaceErrorCode::PathOutsideWorkspace => {
+            GitOperationErrorCode::PermissionDenied
+        }
+        WorkspaceErrorCode::WorkspaceMissing
+        | WorkspaceErrorCode::WorkspaceNotSelected
+        | WorkspaceErrorCode::WorkspaceNotDirectory
+        | WorkspaceErrorCode::InvalidWorkspacePath => GitOperationErrorCode::NotRepository,
+        _ => GitOperationErrorCode::ExternalStateChanged,
+    };
+
+    let mut git_error = GitOperationError::new(
+        code,
+        GitServiceOperation::Snapshot,
+        error.message,
+        error.recoverable,
+    );
+
+    if let Some(relative_path) = error.relative_path {
+        git_error = git_error.with_relative_path(relative_path);
+    }
+    if let Some(details) = error.details {
+        for (key, value) in details {
+            git_error = git_error.with_detail(key, value);
+        }
+    }
+
+    git_error
+}
+
 fn workspace_error_to_restore_error(error: WorkspaceError) -> GitOperationError {
     let code = match error.code {
         WorkspaceErrorCode::VersionConflict
@@ -2437,6 +2500,55 @@ fn validate_snapshot_request_paths(request: &GitSnapshotRequest) -> Result<(), G
             .map(|state| &state.relative_path),
     ) {
         validate_git_workspace_relative_path(path, GitServiceOperation::Snapshot)?;
+    }
+
+    Ok(())
+}
+
+fn ensure_snapshot_file_states(
+    record: &WorkspaceRecord,
+    expected_file_states: &[GitExpectedFileState],
+) -> Result<(), GitOperationError> {
+    if expected_file_states.is_empty() {
+        return Ok(());
+    }
+
+    let files = index_markdown_files(&record.canonical_root, record.info.case_sensitive)
+        .map_err(workspace_error_to_snapshot_error)?;
+
+    for expected in expected_file_states {
+        let current = files.iter().find(|file| {
+            if record.info.case_sensitive {
+                file.relative_path.as_str() == expected.relative_path.as_str()
+            } else {
+                file.relative_path
+                    .eq_ignore_ascii_case(&expected.relative_path)
+            }
+        });
+
+        let Some(current) = current else {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::ExternalStateChanged,
+                GitServiceOperation::Snapshot,
+                "A scoped Markdown file changed on disk before the Git snapshot could be created.",
+                true,
+            )
+            .with_relative_path(expected.relative_path.clone())
+            .with_detail("expectedToken", expected.expected_version.token.clone())
+            .with_detail("currentToken", serde_json::Value::Null));
+        };
+
+        if current.version != expected.expected_version {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::ExternalStateChanged,
+                GitServiceOperation::Snapshot,
+                "A scoped Markdown file changed on disk before the Git snapshot could be created.",
+                true,
+            )
+            .with_relative_path(expected.relative_path.clone())
+            .with_detail("expectedToken", expected.expected_version.token.clone())
+            .with_detail("currentToken", current.version.token.clone()));
+        }
     }
 
     Ok(())
@@ -3691,6 +3803,34 @@ Binary files old/assets/blob.bin and new/assets/blob.bin differ
     }
 
     #[test]
+    fn blocks_snapshot_when_expected_file_state_is_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        let mut request = snapshot_request(&record, &status, "Stale file state");
+        request.expected_file_states = vec![GitExpectedFileState {
+            relative_path: "missing.md".to_owned(),
+            expected_version: crate::models::FileVersion {
+                modified_at: "2026-05-11T00:00:00.000Z".to_owned(),
+                byte_size: 0,
+                content_hash: "sha256:missing".to_owned(),
+                token: "missing-token".to_owned(),
+            },
+        }];
+
+        let error = service().create_snapshot(&record, request).unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::ExternalStateChanged);
+        assert_eq!(error.relative_path.as_deref(), Some("missing.md"));
+        assert!(git_stdout(temp.path(), &["status", "--porcelain"])
+            .lines()
+            .any(|line| line.ends_with("idea.md")));
+    }
+
+    #[test]
     fn blocks_snapshot_without_author_identity() {
         let temp = tempfile::tempdir().unwrap();
         git(temp.path(), &["init", "--quiet"]);
@@ -3840,6 +3980,26 @@ Binary files old/assets/blob.bin and new/assets/blob.bin differ
         assert_eq!(state.state, GitRepositoryStateKind::RepositoryCorrupt);
         assert_eq!(
             state.blocked_reason,
+            Some(GitOperationErrorCode::RepositoryCorrupt)
+        );
+    }
+
+    #[test]
+    fn refresh_state_returns_blocked_repository_summary_without_status_error() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join(".git")).unwrap();
+        fs::write(temp.path().join(".git").join("HEAD"), "not a valid head").unwrap();
+        let record = record_for(temp.path());
+
+        let summary = service().refresh_state(&record).unwrap();
+
+        assert_eq!(
+            summary.repository_state.state,
+            GitRepositoryStateKind::RepositoryCorrupt
+        );
+        assert!(summary.entries.is_empty());
+        assert_eq!(
+            summary.repository_state.blocked_reason,
             Some(GitOperationErrorCode::RepositoryCorrupt)
         );
     }

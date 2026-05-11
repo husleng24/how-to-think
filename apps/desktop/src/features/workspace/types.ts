@@ -1,5 +1,7 @@
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import type {
+  GitBlockedState,
+  GitOperationError,
   GitRepositoryStateToken,
   GitRestoreRequest,
   GitRestoreResult,
@@ -108,6 +110,32 @@ export interface DocumentExternalChangeStatus {
   checkedAt: string;
 }
 
+export type ExternalChangeSource = 'watcher' | 'refresh';
+export type ExternalChangeKind = 'created' | 'modified' | 'deleted' | 'renamed';
+
+export interface ExternalChangeEvent {
+  workspaceId: WorkspaceId;
+  kind: ExternalChangeKind;
+  relativePath: WorkspaceRelativePath;
+  previousRelativePath?: WorkspaceRelativePath | null;
+  file?: WorkspaceFile | null;
+  previousVersion?: FileVersion | null;
+  source: ExternalChangeSource;
+  detectedAt: string;
+}
+
+export interface ExternalChangeBatch {
+  workspaceId: WorkspaceId;
+  source: ExternalChangeSource;
+  events: readonly ExternalChangeEvent[];
+  files: readonly WorkspaceFile[];
+  repositoryStateChanged: boolean;
+  gitStatus?: GitStatusSummary | null;
+  detectedAt: string;
+  watcherActive: boolean;
+  watchError?: WorkspaceError | null;
+}
+
 export interface UserMessage {
   title: string;
   detail: string;
@@ -170,6 +198,7 @@ export interface WorkspaceLifecycleState {
   recentFiles: WorkspaceRelativePath[];
   saveStatus: SaveStatus;
   gitStatus: GitStatusSummary | null;
+  gitBlockedState: GitBlockedState | null;
   prompt: UnsavedPromptState | null;
   lastError: UserMessage | null;
   isBusy: boolean;
@@ -200,6 +229,10 @@ export interface WorkspaceCommands {
   openWorkspaceAtPath(path: string): Promise<WorkspaceSession>;
   createWorkspaceAtPath(path: string): Promise<WorkspaceSession>;
   refreshWorkspaceFiles(workspaceId: WorkspaceId): Promise<WorkspaceFile[]>;
+  refreshGitState(workspaceId: WorkspaceId): Promise<GitStatusSummary>;
+  startWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
+  refreshWorkspaceExternalChanges(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
+  stopWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<void>;
   createMarkdownDocument(
     workspaceId: WorkspaceId,
     relativePath: WorkspaceRelativePath,
@@ -243,3 +276,5 @@ export interface RestoreActiveFromGitInput {
   sourceRef: string;
   expectedRepoToken: GitRepositoryStateToken;
 }
+
+export type GitOperationFailure = GitOperationError;

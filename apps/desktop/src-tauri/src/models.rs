@@ -174,6 +174,9 @@ pub struct ExternalChangeBatch {
     pub source: ExternalChangeSource,
     pub events: Vec<ExternalChangeEvent>,
     pub files: Vec<WorkspaceFile>,
+    pub repository_state_changed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub git_status: Option<crate::git_contracts::GitStatusSummary>,
     pub detected_at: IsoDateTime,
     pub watcher_active: bool,
     #[serde(skip_serializing_if = "Option::is_none")]

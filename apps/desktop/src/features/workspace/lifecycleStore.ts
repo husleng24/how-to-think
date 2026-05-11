@@ -5,9 +5,15 @@ import type {
   WorkspaceFile,
   WorkspaceRelativePath,
 } from '../../types/markdownLifecycle';
+import {
+  gitBlockedStateForRepository,
+  gitBlockedStateFromError,
+} from '../git-service';
+import type { GitOperationError, GitServiceOperation, GitStatusSummary } from '../git-service';
 import { mapWorkspaceError, saveStatusFromBlockedResult, saveStatusFromError } from './errorMapping';
 import type {
   ActiveDocumentState,
+  ExternalChangeBatch,
   OpenedDocumentPayload,
   PendingDocumentAction,
   SaveRequestState,
@@ -26,6 +32,8 @@ export type WorkspaceLifecycleAction =
   | { type: 'operation-started' }
   | { type: 'operation-failed'; error: unknown }
   | { type: 'files-refreshed'; files: WorkspaceFile[] }
+  | { type: 'git-status-refreshed'; status: GitStatusSummary }
+  | { type: 'external-change-detected'; batch: ExternalChangeBatch }
   | { type: 'document-opened'; payload: OpenedDocumentPayload }
   | {
       type: 'document-restored';
@@ -67,6 +75,7 @@ export const initialWorkspaceLifecycleState: WorkspaceLifecycleState = {
     message: 'No file open',
   },
   gitStatus: null,
+  gitBlockedState: null,
   prompt: null,
   lastError: null,
   isBusy: false,
@@ -93,6 +102,7 @@ export function workspaceLifecycleReducer(
         active: null,
         saveStatus: noFileStatus(),
         gitStatus: null,
+        gitBlockedState: null,
         isBusy: false,
       };
 
@@ -105,6 +115,7 @@ export function workspaceLifecycleReducer(
         active: null,
         saveStatus: noFileStatus(),
         gitStatus: null,
+        gitBlockedState: null,
         lastError: null,
         isBusy: false,
       };
@@ -128,6 +139,7 @@ export function workspaceLifecycleReducer(
       return {
         ...state,
         isBusy: false,
+        gitBlockedState: gitBlockedStateFromUnknown(action.error) ?? state.gitBlockedState,
         lastError: mapWorkspaceError(action.error),
       };
 
@@ -137,6 +149,20 @@ export function workspaceLifecycleReducer(
         files: sortWorkspaceFiles(action.files),
         isBusy: false,
       };
+
+    case 'git-status-refreshed':
+      if (state.workspace?.id !== action.status.workspaceId) {
+        return state;
+      }
+
+      return {
+        ...state,
+        gitStatus: action.status,
+        gitBlockedState: gitBlockedStateForRepository(action.status.repositoryState, 'refresh'),
+      };
+
+    case 'external-change-detected':
+      return applyExternalChangeBatch(state, action.batch);
 
     case 'document-opened': {
       const relativePath = action.payload.result.snapshot.relativePath;
@@ -191,6 +217,9 @@ export function workspaceLifecycleReducer(
           savedAt: action.payload.result.snapshot.openedAt,
         },
         gitStatus: action.gitStatus,
+        gitBlockedState: action.gitStatus
+          ? gitBlockedStateForRepository(action.gitStatus.repositoryState, 'restore')
+          : null,
         prompt: null,
         lastError: null,
         isBusy: false,
@@ -416,6 +445,109 @@ export function createSaveRequest(
     revision: active.contentRevision,
     reason,
   };
+}
+
+function applyExternalChangeBatch(
+  state: WorkspaceLifecycleState,
+  batch: ExternalChangeBatch,
+): WorkspaceLifecycleState {
+  if (state.workspace?.id !== batch.workspaceId) {
+    return state;
+  }
+
+  const activeEvent = state.active
+    ? batch.events.find((event) => {
+        if (event.relativePath === state.active?.snapshot.relativePath) {
+          return true;
+        }
+
+        return event.previousRelativePath === state.active?.snapshot.relativePath;
+      })
+    : undefined;
+  const gitBlockedState = batch.gitStatus
+    ? gitBlockedStateForRepository(batch.gitStatus.repositoryState, 'refresh')
+    : state.gitBlockedState;
+
+  if (!state.active || !activeEvent) {
+    return {
+      ...state,
+      files: sortWorkspaceFiles([...batch.files]),
+      gitStatus: batch.gitStatus ?? state.gitStatus,
+      gitBlockedState,
+      isBusy: false,
+    };
+  }
+
+  const saveStatus = saveStatusForExternalChange(state.active, activeEvent.kind);
+
+  return {
+    ...state,
+    files: sortWorkspaceFiles([...batch.files]),
+    saveStatus: saveStatus ?? state.saveStatus,
+    gitStatus: batch.gitStatus ?? state.gitStatus,
+    gitBlockedState,
+    isBusy: false,
+  };
+}
+
+function saveStatusForExternalChange(
+  active: ActiveDocumentState,
+  kind: ExternalChangeBatch['events'][number]['kind'],
+): SaveStatus | null {
+  if (kind === 'modified') {
+    return {
+      kind: 'conflict',
+      message: `External changes detected in ${active.snapshot.relativePath}`,
+    };
+  }
+
+  if (kind === 'deleted' || kind === 'renamed') {
+    return {
+      kind: 'missing',
+      message: `The active file moved or was deleted: ${active.snapshot.relativePath}`,
+    };
+  }
+
+  return null;
+}
+
+function gitBlockedStateFromUnknown(error: unknown) {
+  return gitBlockedStateFromError(asGitOperationError(error));
+}
+
+function asGitOperationError(error: unknown): GitOperationError | null {
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+
+  const candidate = error as Partial<GitOperationError>;
+  if (typeof candidate.code !== 'string' || typeof candidate.message !== 'string') {
+    return null;
+  }
+
+  return {
+    code: candidate.code as GitOperationError['code'],
+    operation: isGitServiceOperation(candidate.operation) ? candidate.operation : 'refresh',
+    message: candidate.message,
+    recoverable: Boolean(candidate.recoverable),
+    relativePath:
+      typeof candidate.relativePath === 'string' ? candidate.relativePath : undefined,
+    details:
+      candidate.details && typeof candidate.details === 'object' ? candidate.details : undefined,
+  };
+}
+
+function isGitServiceOperation(value: unknown): value is GitServiceOperation {
+  return (
+    value === 'detect' ||
+    value === 'init' ||
+    value === 'status' ||
+    value === 'snapshot' ||
+    value === 'history' ||
+    value === 'diff' ||
+    value === 'restore' ||
+    value === 'refresh'
+  );
 }
 
 function sortWorkspaceFiles(files: WorkspaceFile[]): WorkspaceFile[] {

@@ -59,7 +59,7 @@ git_create_snapshot(request: GitSnapshotRequest): GitSnapshotResult
 git_history(request: GitHistoryRequest): GitHistoryEntry[]
 git_diff(request: GitDiffRequest): GitDiffResult
 git_restore_file(request: GitRestoreRequest): GitRestoreResult
-git_refresh({ workspaceId }): GitRepositoryState
+git_refresh({ workspaceId }): GitStatusSummary
 ```
 
 All requests are scoped to the selected workspace. Requests never accept host
@@ -142,7 +142,10 @@ block and Git-specific error mapping on top of that boundary.
 
 ## Operation Permission Matrix
 
-`detect` and `refresh` are read-only retries in every state.
+`detect` and `refresh` are read-only retries in every state. `refresh` returns a
+`GitStatusSummary`; for blocked states where normal `status` is unavailable, the
+summary contains the refreshed repository state and an empty entry list so the UI
+can surface the typed blocked state without losing the current token boundary.
 
 | Repository state | Read-only operations | Mutating operations |
 | --- | --- | --- |

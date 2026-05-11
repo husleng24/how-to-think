@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import { mergeEditorDocumentIntoMarkdownDocument } from '../../services/markdownLifecycle';
 import type { SaveReason, WorkspaceRelativePath } from '../../types/markdownLifecycle';
+import { isRepositoryTokenStale } from '../git-service';
 import { openDocumentForEditor, isSavedMarkdownResult, tauriWorkspaceCommands } from './commands';
 import {
   createSaveRequest,
@@ -15,6 +16,7 @@ import {
 import type {
   PendingDocumentAction,
   RestoreActiveFromGitInput,
+  ExternalChangeBatch,
   WorkspaceCommands,
   WorkspaceLifecycleState,
 } from './types';
@@ -65,6 +67,19 @@ export function useWorkspaceLifecycle(
     stateRef.current = state;
   }, [state]);
 
+  const refreshGitStateDirect = useCallback(
+    async (workspaceId: string) => {
+      try {
+        const status = await commands.refreshGitState(workspaceId);
+        dispatch({ type: 'git-status-refreshed', status });
+        return status;
+      } catch {
+        return null;
+      }
+    },
+    [commands],
+  );
+
   const openFileDirect = useCallback(
     async (workspaceId: string, relativePath: WorkspaceRelativePath) => {
       dispatch({ type: 'operation-started' });
@@ -72,12 +87,13 @@ export function useWorkspaceLifecycle(
       try {
         const payload = await openDocumentForEditor(commands, workspaceId, relativePath);
         dispatch({ type: 'document-opened', payload });
+        void refreshGitStateDirect(workspaceId);
         await commands.rememberLastOpenedFile(workspaceId, relativePath);
       } catch (error) {
         dispatch({ type: 'operation-failed', error });
       }
     },
-    [commands],
+    [commands, refreshGitStateDirect],
   );
 
   const loadSession = useCallback(
@@ -93,6 +109,7 @@ export function useWorkspaceLifecycle(
         }
 
         dispatch({ type: 'workspace-loaded', session });
+        void refreshGitStateDirect(session.workspace.id);
 
         if (autoOpenLastFile && session.lastOpenedFile) {
           await openFileDirect(session.workspace.id, session.lastOpenedFile);
@@ -101,13 +118,68 @@ export function useWorkspaceLifecycle(
         dispatch({ type: 'startup-failed', error });
       }
     },
-    [autoOpenLastFile, openFileDirect],
+    [autoOpenLastFile, openFileDirect, refreshGitStateDirect],
   );
 
   useEffect(() => {
     dispatch({ type: 'startup-loading' });
     void loadSession(() => commands.loadRememberedWorkspace());
   }, [commands, loadSession]);
+
+  useEffect(() => {
+    const workspaceId = state.workspace?.id;
+    if (!workspaceId) {
+      return undefined;
+    }
+
+    const unlistenPromise = import('@tauri-apps/api/event').then(({ listen }) =>
+      listen<ExternalChangeBatch>('workspace://external-change', (event) => {
+        if (event.payload.workspaceId === workspaceId) {
+          dispatch({ type: 'external-change-detected', batch: event.payload });
+        }
+      }),
+    );
+
+    void commands
+      .startWorkspaceChangeDetection(workspaceId)
+      .then((batch) => dispatch({ type: 'external-change-detected', batch }))
+      .catch(() => undefined);
+
+    return () => {
+      void unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+      void commands.stopWorkspaceChangeDetection(workspaceId).catch(() => undefined);
+    };
+  }, [commands, state.workspace?.id]);
+
+  useEffect(() => {
+    const refreshExternalState = () => {
+      const workspaceId = stateRef.current.workspace?.id;
+      if (!workspaceId) {
+        return;
+      }
+
+      void commands
+        .refreshWorkspaceExternalChanges(workspaceId)
+        .then((batch) => dispatch({ type: 'external-change-detected', batch }))
+        .catch(() => {
+          void refreshGitStateDirect(workspaceId);
+        });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        refreshExternalState();
+      }
+    };
+
+    window.addEventListener('focus', refreshExternalState);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      window.removeEventListener('focus', refreshExternalState);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [commands, refreshGitStateDirect]);
 
   const performAction = useCallback(
     async (action: PendingDocumentAction, bypassGuard = false) => {
@@ -300,6 +372,23 @@ export function useWorkspaceLifecycle(
         return false;
       }
 
+      if (
+        current.gitStatus?.token &&
+        isRepositoryTokenStale(input.expectedRepoToken, current.gitStatus.token)
+      ) {
+        dispatch({
+          type: 'operation-failed',
+          error: {
+            code: 'external_state_changed',
+            operation: 'restore',
+            message: 'The repository changed after the restore view was loaded.',
+            recoverable: true,
+            relativePath: active.snapshot.relativePath,
+          },
+        });
+        return false;
+      }
+
       dispatch({ type: 'operation-started' });
 
       try {
@@ -357,10 +446,16 @@ export function useWorkspaceLifecycle(
         dispatch({ type: 'operation-started' });
 
         try {
-          const files = await commands.refreshWorkspaceFiles(current.workspace.id);
-          dispatch({ type: 'files-refreshed', files });
-        } catch (error) {
-          dispatch({ type: 'operation-failed', error });
+          const batch = await commands.refreshWorkspaceExternalChanges(current.workspace.id);
+          dispatch({ type: 'external-change-detected', batch });
+        } catch {
+          try {
+            const files = await commands.refreshWorkspaceFiles(current.workspace.id);
+            dispatch({ type: 'files-refreshed', files });
+            void refreshGitStateDirect(current.workspace.id);
+          } catch (error) {
+            dispatch({ type: 'operation-failed', error });
+          }
         }
       },
 
@@ -433,7 +528,7 @@ export function useWorkspaceLifecycle(
 
       saveActive,
     }),
-    [commands, loadSession, performAction, restoreActiveFromGit, saveActive],
+    [commands, loadSession, performAction, refreshGitStateDirect, restoreActiveFromGit, saveActive],
   );
 
   return [state, actions];

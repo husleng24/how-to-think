@@ -162,6 +162,99 @@ describe('workspace lifecycle store', () => {
     expect(state.gitStatus?.entries[0].relativePath).toBe('plan.md');
   });
 
+  it('updates Git status and typed blocked state from repository refreshes', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    const status = gitStatusSummary('plan.md');
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'git-status-refreshed',
+      status: {
+        ...status,
+        repositoryState: {
+          ...status.repositoryState,
+          state: 'merge_conflict',
+          blockedReason: 'merge_conflict',
+        },
+      },
+    });
+
+    expect(state.gitStatus?.repositoryState.state).toBe('merge_conflict');
+    expect(state.gitBlockedState).toMatchObject({
+      kind: 'merge_conflict',
+      operation: 'refresh',
+    });
+  });
+
+  it('coalesces file-level and Git-level external changes into one state update', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    state = workspaceLifecycleReducer(state, {
+      type: 'document-opened',
+      payload: openedPayload('plan.md'),
+    });
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'external-change-detected',
+      batch: {
+        workspaceId: 'workspace-1',
+        source: 'watcher',
+        events: [
+          {
+            workspaceId: 'workspace-1',
+            kind: 'modified',
+            relativePath: 'plan.md',
+            file: workspaceFile('plan.md', 'external-token'),
+            source: 'watcher',
+            detectedAt: '2026-05-10T00:03:00Z',
+          },
+        ],
+        files: [workspaceFile('plan.md', 'external-token')],
+        repositoryStateChanged: true,
+        gitStatus: gitStatusSummary('plan.md', 'external-repo-token'),
+        detectedAt: '2026-05-10T00:03:00Z',
+        watcherActive: true,
+      },
+    });
+
+    expect(state.saveStatus.kind).toBe('conflict');
+    expect(state.files[0].version.token).toBe('external-token');
+    expect(state.gitStatus?.token?.token).toBe('external-repo-token');
+    expect(state.gitBlockedState).toBeNull();
+  });
+
+  it('maps stale Git operation failures without clearing the active document', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    state = workspaceLifecycleReducer(state, {
+      type: 'document-opened',
+      payload: openedPayload('plan.md'),
+    });
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'operation-failed',
+      error: {
+        code: 'external_state_changed',
+        operation: 'restore',
+        message: 'Repository changed.',
+        recoverable: true,
+        relativePath: 'plan.md',
+      },
+    });
+
+    expect(state.active?.snapshot.relativePath).toBe('plan.md');
+    expect(state.gitBlockedState).toMatchObject({
+      kind: 'stale_repository_state',
+      operation: 'restore',
+    });
+  });
+
   it('creates Save, Discard, Cancel prompts for dirty switches and disables Save while saving', () => {
     let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
       type: 'workspace-loaded',
@@ -242,14 +335,14 @@ function openedPayload(
   };
 }
 
-function workspaceFile(relativePath: string): WorkspaceFile {
+function workspaceFile(relativePath: string, token = `${relativePath}-token`): WorkspaceFile {
   return {
     relativePath,
     name: relativePath.split('/').pop() ?? relativePath,
     extension: '.md',
     byteSize: 7,
     modifiedAt: '2026-05-10T00:00:00Z',
-    version: fileVersion(`${relativePath}-token`),
+    version: fileVersion(token),
   };
 }
 
@@ -296,7 +389,7 @@ function savedResult(relativePath: string): SaveMarkdownMindMapResult & {
   };
 }
 
-function gitStatusSummary(relativePath: string): GitStatusSummary {
+function gitStatusSummary(relativePath: string, token = 'repo-token'): GitStatusSummary {
   return {
     workspaceId: 'workspace-1',
     repositoryState: {
@@ -311,7 +404,7 @@ function gitStatusSummary(relativePath: string): GitStatusSummary {
       branchName: 'main',
       headOid: 'abc123',
       token: {
-        token: 'repo-token',
+        token,
         headOid: 'abc123',
         indexVersion: 3,
         indexChecksum: 'index',
@@ -322,7 +415,7 @@ function gitStatusSummary(relativePath: string): GitStatusSummary {
       checkedAt: '2026-05-10T00:02:00Z',
     },
     token: {
-      token: 'repo-token',
+      token,
       headOid: 'abc123',
       indexVersion: 3,
       indexChecksum: 'index',

@@ -2,6 +2,8 @@ import {
   GIT_OPERATION_ERROR_CODES,
   GIT_OPERATION_PERMISSION_MATRIX,
   GIT_SERVICE_METHODS,
+  gitBlockedStateForRepository,
+  gitBlockedStateFromError,
   gitMethodRequiresExpectedRepoToken,
   gitOperationPolicy,
   isGitOperationAllowed,
@@ -358,5 +360,57 @@ describe('Git service contract', () => {
     expect(GIT_SERVICE_METHODS.some((method) => method.commandName.includes('remote'))).toBe(false);
     expect(GIT_SERVICE_METHODS.some((method) => method.commandName.includes('branch'))).toBe(false);
     expect(GIT_SERVICE_METHODS.some((method) => method.commandName.includes('rebase'))).toBe(false);
+    expect(GIT_SERVICE_METHODS.find((method) => method.operation === 'refresh')?.resultType).toBe(
+      'GitStatusSummary',
+    );
+  });
+
+  it('maps blocked repository and stale operation states to typed frontend states', () => {
+    const blocked = gitBlockedStateForRepository(
+      {
+        workspaceId: 'workspace-1',
+        state: 'merge_conflict',
+        backend: {
+          kind: 'system_git',
+          version: 'git version 2.52.0',
+        },
+        selectedRootDisplayPath: 'C:/Users/example/notes',
+        repositoryRootDisplayPath: 'C:/Users/example/notes',
+        branchName: 'main',
+        headOid: sampleToken.headOid,
+        token: sampleToken,
+        blockedReason: 'merge_conflict',
+        warnings: [],
+        checkedAt: '2026-05-11T00:00:01.000Z',
+      },
+      'snapshot',
+    );
+
+    expect(blocked).toMatchObject({
+      kind: 'merge_conflict',
+      operation: 'snapshot',
+      code: 'merge_conflict',
+    });
+    expect(
+      gitBlockedStateFromError({
+        code: 'external_state_changed',
+        operation: 'restore',
+        message: 'Repository changed.',
+        recoverable: true,
+        relativePath: 'notes/idea.md',
+      }),
+    ).toMatchObject({
+      kind: 'stale_repository_state',
+      operation: 'restore',
+      relativePath: 'notes/idea.md',
+    });
+    expect(
+      gitBlockedStateFromError({
+        code: 'restore_conflict',
+        operation: 'restore',
+        message: 'File changed.',
+        recoverable: true,
+      }),
+    ).toMatchObject({ kind: 'stale_file_state' });
   });
 });

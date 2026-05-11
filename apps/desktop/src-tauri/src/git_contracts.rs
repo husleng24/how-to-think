@@ -575,7 +575,7 @@ pub const GIT_SERVICE_METHODS: &[GitServiceMethodSignature] = &[
         operation: GitServiceOperation::Refresh,
         command_name: "git_refresh",
         request_type: "{ workspaceId }",
-        result_type: "GitRepositoryState",
+        result_type: "GitStatusSummary",
         mutability: GitServiceMutability::ReadOnly,
         requires_workspace: true,
         requires_expected_repo_token: false,

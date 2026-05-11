@@ -381,6 +381,7 @@ function renderPanel(input: {
     recentFiles: ['notes/plan.md'],
     saveStatus: { kind: 'saved', message: 'Saved' },
     gitStatus: null,
+    gitBlockedState: null,
     prompt: null,
     lastError: null,
     isBusy: false,

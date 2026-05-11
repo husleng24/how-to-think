@@ -406,6 +406,26 @@ export function EditorShell({
             </dl>
           </section>
 
+          {workspaceState?.gitBlockedState ? (
+            <section className="inspector-section git-state-panel">
+              <p className="field-label">Git</p>
+              <p className="git-state-title">{workspaceState.gitBlockedState.title}</p>
+              <p>{workspaceState.gitBlockedState.detail}</p>
+            </section>
+          ) : workspaceState?.gitStatus ? (
+            <section className="inspector-section git-state-panel">
+              <p className="field-label">Git</p>
+              <p className="git-state-title">
+                {workspaceState.gitStatus.repositoryState.branchName ?? 'No branch'}
+              </p>
+              <p>
+                {workspaceState.gitStatus.changedFileCount === 1
+                  ? '1 changed file'
+                  : `${workspaceState.gitStatus.changedFileCount} changed files`}
+              </p>
+            </section>
+          ) : null}
+
           <section className="inspector-section">
             <CompatibilityDiagnosticsPanel
               documentDiagnostics={workspaceState?.active?.markdownDocument.diagnostics}
