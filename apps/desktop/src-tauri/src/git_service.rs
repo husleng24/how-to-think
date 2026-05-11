@@ -1,9 +1,11 @@
 use crate::git_contracts::{
     is_repository_token_stale, validate_git_workspace_relative_path, GitAuthorIdentity,
-    GitBackendInfo, GitBackendKind, GitOperationError, GitOperationErrorCode, GitRepositoryState,
-    GitRepositoryStateKind, GitRepositoryStateToken, GitRepositoryWarning, GitServiceOperation,
-    GitSnapshotRequest, GitSnapshotResult, GitStatusChangeKind, GitStatusCounts, GitStatusEntry,
-    GitStatusSummary,
+    GitBackendInfo, GitBackendKind, GitDiffContentKind, GitDiffFile, GitDiffFileChangeKind,
+    GitDiffHunk, GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffRequest, GitDiffResult,
+    GitDiffTruncation, GitHistoryEntry, GitHistoryRequest, GitOperationError,
+    GitOperationErrorCode, GitRepositoryState, GitRepositoryStateKind, GitRepositoryStateToken,
+    GitRepositoryWarning, GitServiceOperation, GitSnapshotRequest, GitSnapshotResult,
+    GitStatusChangeKind, GitStatusCounts, GitStatusEntry, GitStatusSummary,
 };
 use crate::models::{IsoDateTime, WorkspaceRecord, WorkspaceRelativePath};
 use crate::path_guard::supported_markdown_extension;
@@ -17,6 +19,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 const DEFAULT_GIT_EXECUTABLE: &str = "git";
+const DEFAULT_HISTORY_LIMIT: usize = 100;
+const MAX_HISTORY_LIMIT: usize = 500;
+const MAX_DIFF_BYTES: usize = 512 * 1024;
+const MAX_DIFF_FILES: usize = 100;
+const MAX_DIFF_LINES: usize = 2_000;
+const MAX_DIFF_HUNKS_PER_FILE: usize = 200;
 
 pub fn detect_repository(
     record: &WorkspaceRecord,
@@ -39,6 +47,20 @@ pub fn create_snapshot(
     request: GitSnapshotRequest,
 ) -> Result<GitSnapshotResult, GitOperationError> {
     GitRepositoryService::default().create_snapshot(record, request)
+}
+
+pub fn list_git_history(
+    record: &WorkspaceRecord,
+    request: GitHistoryRequest,
+) -> Result<Vec<GitHistoryEntry>, GitOperationError> {
+    GitRepositoryService::default().list_history(record, request)
+}
+
+pub fn get_git_diff(
+    record: &WorkspaceRecord,
+    request: GitDiffRequest,
+) -> Result<GitDiffResult, GitOperationError> {
+    GitRepositoryService::default().diff(record, request)
 }
 
 #[derive(Debug, Clone)]
@@ -209,6 +231,326 @@ impl GitRepositoryService {
             repository_state,
             status: refreshed_status,
             snapshot_at: now_iso(),
+        })
+    }
+
+    fn list_history(
+        &self,
+        record: &WorkspaceRecord,
+        request: GitHistoryRequest,
+    ) -> Result<Vec<GitHistoryEntry>, GitOperationError> {
+        if request.workspace_id != record.info.id {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NotRepository,
+                GitServiceOperation::History,
+                "The history request workspace id does not match the selected workspace.",
+                true,
+            ));
+        }
+
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::History)?;
+        self.ensure_read_state(
+            repository_state.state,
+            GitServiceOperation::History,
+            "Git history is unavailable for the selected workspace in its current repository state.",
+        )?;
+        let context = repository_context(record, &repository_state, GitServiceOperation::History)?;
+        let max_entries = request
+            .max_entries
+            .unwrap_or(DEFAULT_HISTORY_LIMIT)
+            .clamp(1, MAX_HISTORY_LIMIT);
+        let repo_path = request
+            .relative_path
+            .as_deref()
+            .map(|path| {
+                validate_git_workspace_relative_path(path, GitServiceOperation::History)?;
+                workspace_path_to_repo_relative(&context, path).ok_or_else(|| {
+                    GitOperationError::new(
+                        GitOperationErrorCode::FileNotInHistory,
+                        GitServiceOperation::History,
+                        "The requested file is outside the addressable Git repository scope.",
+                        true,
+                    )
+                    .with_relative_path(path)
+                })
+            })
+            .transpose()?;
+
+        let mut args = vec![
+            OsString::from("-c"),
+            OsString::from("core.quotepath=false"),
+            OsString::from("log"),
+            OsString::from(format!("-n{max_entries}")),
+            OsString::from("--date=iso-strict"),
+            OsString::from("--format=%H%x1f%P%x1f%an%x1f%ae%x1f%aI%x1f%s"),
+        ];
+
+        if repo_path.is_some() {
+            args.push(OsString::from("--follow"));
+        }
+
+        args.push(OsString::from("--"));
+        if let Some(path) = &repo_path {
+            args.push(OsString::from(path));
+        } else if let Some(prefix) = &context.workspace_prefix_in_repo {
+            args.push(OsString::from(prefix));
+        }
+
+        let output =
+            match self.run_git_result(&context.repository_root, args, GitServiceOperation::History)
+            {
+                Ok(output) => output,
+                Err(error) if error.code == GitOperationErrorCode::NoChanges => {
+                    return Ok(Vec::new())
+                }
+                Err(error) => return Err(error),
+            };
+
+        let mut entries = Vec::new();
+        for line in output.stdout.lines().filter(|line| !line.trim().is_empty()) {
+            let fields = line.split('\x1f').collect::<Vec<_>>();
+            if fields.len() < 6 {
+                continue;
+            }
+
+            let commit_oid = fields[0].to_owned();
+            let touched_paths =
+                self.commit_touched_paths(&context, &commit_oid, repo_path.as_deref())?;
+            let affected_file_count = touched_paths.len();
+
+            entries.push(GitHistoryEntry {
+                short_commit_oid: short_commit_oid(&commit_oid),
+                commit_oid,
+                parent_oids: fields[1]
+                    .split_whitespace()
+                    .filter(|parent| !parent.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+                author_name: fields[2].to_owned(),
+                author_email: fields[3].to_owned(),
+                authored_at: fields[4].to_owned(),
+                subject: fields[5].to_owned(),
+                touched_paths,
+                affected_file_count,
+            });
+        }
+
+        if repo_path.is_some() && entries.is_empty() {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::FileNotInHistory,
+                GitServiceOperation::History,
+                "The requested file was not found in Git history.",
+                true,
+            )
+            .with_relative_path(request.relative_path.unwrap_or_default()));
+        }
+
+        Ok(entries)
+    }
+
+    fn diff(
+        &self,
+        record: &WorkspaceRecord,
+        request: GitDiffRequest,
+    ) -> Result<GitDiffResult, GitOperationError> {
+        if request.workspace_id != record.info.id {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NotRepository,
+                GitServiceOperation::Diff,
+                "The diff request workspace id does not match the selected workspace.",
+                true,
+            ));
+        }
+
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::Diff)?;
+        self.ensure_read_state(
+            repository_state.state,
+            GitServiceOperation::Diff,
+            "Git diff is unavailable for the selected workspace in its current repository state.",
+        )?;
+        let context = repository_context(record, &repository_state, GitServiceOperation::Diff)?;
+        let repo_path = request
+            .relative_path
+            .as_deref()
+            .map(|path| {
+                validate_git_workspace_relative_path(path, GitServiceOperation::Diff)?;
+                workspace_path_to_repo_relative(&context, path).ok_or_else(|| {
+                    GitOperationError::new(
+                        GitOperationErrorCode::FileNotInHistory,
+                        GitServiceOperation::Diff,
+                        "The requested path is outside the addressable Git repository scope.",
+                        true,
+                    )
+                    .with_relative_path(path)
+                })
+            })
+            .transpose()?;
+
+        let base_ref = require_ref(request.base_ref.as_deref(), "baseRef")?;
+        let resolved_base = self.resolve_commit_ref(&context.repository_root, &base_ref)?;
+        let resolved_head = if request.mode == GitDiffMode::RefRange {
+            let head_ref = require_ref(request.head_ref.as_deref(), "headRef")?;
+            Some(self.resolve_commit_ref(&context.repository_root, &head_ref)?)
+        } else {
+            None
+        };
+
+        let mut args = diff_base_args();
+        match request.mode {
+            GitDiffMode::WorkingTree => {
+                args.push(OsString::from(resolved_base.as_str()));
+            }
+            GitDiffMode::Staged => {
+                args.push(OsString::from("--cached"));
+                args.push(OsString::from(resolved_base.as_str()));
+            }
+            GitDiffMode::RefRange => {
+                args.push(OsString::from(resolved_base.as_str()));
+                args.push(OsString::from(resolved_head.as_deref().unwrap_or_default()));
+            }
+        }
+        args.push(OsString::from("--"));
+        if let Some(path) = &repo_path {
+            args.push(OsString::from(path));
+        } else if let Some(prefix) = &context.workspace_prefix_in_repo {
+            args.push(OsString::from(prefix));
+        }
+
+        let output =
+            self.run_git_result(&context.repository_root, args, GitServiceOperation::Diff)?;
+        let (patch, omitted_byte_count) = truncate_utf8(&output.stdout, MAX_DIFF_BYTES);
+        let mut truncation = GitDiffTruncation {
+            is_truncated: omitted_byte_count > 0,
+            max_bytes: MAX_DIFF_BYTES,
+            max_files: MAX_DIFF_FILES,
+            max_lines: MAX_DIFF_LINES,
+            max_hunks_per_file: MAX_DIFF_HUNKS_PER_FILE,
+            included_file_count: 0,
+            omitted_file_count: 0,
+            included_line_count: 0,
+            omitted_line_count: 0,
+            omitted_byte_count,
+        };
+        let files = parse_diff_patch(
+            &context,
+            &patch,
+            record.info.case_sensitive,
+            &mut truncation,
+        );
+        let additions = files.iter().map(|file| file.additions).sum();
+        let deletions = files.iter().map(|file| file.deletions).sum();
+        let file_count = files.len();
+
+        Ok(GitDiffResult {
+            workspace_id: record.info.id.clone(),
+            mode: request.mode,
+            relative_path: request.relative_path,
+            base_ref: request.base_ref,
+            head_ref: request.head_ref,
+            files,
+            file_count,
+            additions,
+            deletions,
+            changed_line_count: additions + deletions,
+            truncation,
+            generated_at: now_iso(),
+        })
+    }
+
+    fn ensure_read_state(
+        &self,
+        state: GitRepositoryStateKind,
+        operation: GitServiceOperation,
+        message: &'static str,
+    ) -> Result<(), GitOperationError> {
+        if matches!(
+            state,
+            GitRepositoryStateKind::ValidRepository
+                | GitRepositoryStateKind::NestedRepository
+                | GitRepositoryStateKind::ParentRepository
+                | GitRepositoryStateKind::DetachedHead
+                | GitRepositoryStateKind::MergeConflict
+        ) {
+            Ok(())
+        } else {
+            Err(GitOperationError::new(
+                blocked_by_state(state),
+                operation,
+                message,
+                true,
+            ))
+        }
+    }
+
+    fn commit_touched_paths(
+        &self,
+        context: &RepositoryContext,
+        commit_oid: &str,
+        repo_path: Option<&str>,
+    ) -> Result<Vec<WorkspaceRelativePath>, GitOperationError> {
+        let mut args = vec![
+            OsString::from("-c"),
+            OsString::from("core.quotepath=false"),
+            OsString::from("show"),
+            OsString::from("--format="),
+            OsString::from("--name-only"),
+            OsString::from("-z"),
+            OsString::from("--find-renames"),
+            OsString::from(commit_oid),
+            OsString::from("--"),
+        ];
+
+        if let Some(path) = repo_path {
+            args.push(OsString::from(path));
+        } else if let Some(prefix) = &context.workspace_prefix_in_repo {
+            args.push(OsString::from(prefix));
+        }
+
+        let output =
+            self.run_git_result(&context.repository_root, args, GitServiceOperation::History)?;
+        let mut paths = output
+            .stdout
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .filter_map(|path| repo_path_to_workspace_relative(context, path))
+            .collect::<BTreeSet<_>>();
+
+        if let Some(prefix) = &context.repository_prefix_in_workspace {
+            paths.retain(|path| path == prefix || path.starts_with(&format!("{prefix}/")));
+        }
+
+        Ok(paths.into_iter().collect())
+    }
+
+    fn resolve_commit_ref(&self, cwd: &Path, value: &str) -> Result<String, GitOperationError> {
+        let value = value.trim();
+        if value.is_empty() || value.chars().any(char::is_control) {
+            return Err(invalid_ref_error(
+                "Git diff refs must be non-empty commit references.",
+            ));
+        }
+
+        let peeled = format!("{value}^{{commit}}");
+        self.run_git_result(
+            cwd,
+            [
+                OsString::from("rev-parse"),
+                OsString::from("--verify"),
+                OsString::from("--end-of-options"),
+                OsString::from(peeled),
+            ],
+            GitServiceOperation::Diff,
+        )
+        .map(|output| output.stdout.trim().to_owned())
+        .map_err(|error| {
+            if matches!(
+                error.code,
+                GitOperationErrorCode::InvalidRef | GitOperationErrorCode::UnknownGitError
+            ) {
+                invalid_ref_error("The requested Git revision could not be resolved to a commit.")
+            } else {
+                error
+            }
         })
     }
 
@@ -942,6 +1284,461 @@ impl GitRepositoryService {
     }
 }
 
+fn diff_base_args() -> Vec<OsString> {
+    vec![
+        OsString::from("-c"),
+        OsString::from("core.quotepath=false"),
+        OsString::from("diff"),
+        OsString::from("--find-renames"),
+        OsString::from("--no-ext-diff"),
+        OsString::from("--src-prefix=old/"),
+        OsString::from("--dst-prefix=new/"),
+        OsString::from("--unified=3"),
+    ]
+}
+
+fn require_ref(value: Option<&str>, field_name: &'static str) -> Result<String, GitOperationError> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Err(invalid_ref_error(format!(
+            "Git diff requests must include a non-empty {field_name}."
+        )));
+    };
+
+    Ok(value.to_owned())
+}
+
+fn invalid_ref_error(message: impl Into<String>) -> GitOperationError {
+    GitOperationError::new(
+        GitOperationErrorCode::InvalidRef,
+        GitServiceOperation::Diff,
+        message,
+        true,
+    )
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> (String, usize) {
+    if value.len() <= max_bytes {
+        return (value.to_owned(), 0);
+    }
+
+    let mut end = max_bytes;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+
+    (value[..end].to_owned(), value.len() - end)
+}
+
+fn parse_diff_patch(
+    context: &RepositoryContext,
+    patch: &str,
+    case_sensitive: bool,
+    truncation: &mut GitDiffTruncation,
+) -> Vec<GitDiffFile> {
+    let mut parser = DiffPatchParser::new(context, case_sensitive, truncation);
+    for line in patch.lines() {
+        parser.parse_line(line);
+    }
+    parser.finish()
+}
+
+struct DiffPatchParser<'a> {
+    context: &'a RepositoryContext,
+    case_sensitive: bool,
+    truncation: &'a mut GitDiffTruncation,
+    files: Vec<GitDiffFile>,
+    current_file: Option<GitDiffFile>,
+    current_hunk: Option<GitDiffHunkBuilder>,
+    skip_current_file: bool,
+}
+
+#[derive(Debug, Clone)]
+struct GitDiffHunkBuilder {
+    hunk: GitDiffHunk,
+    next_old_line: u32,
+    next_new_line: u32,
+    should_store_lines: bool,
+}
+
+impl<'a> DiffPatchParser<'a> {
+    fn new(
+        context: &'a RepositoryContext,
+        case_sensitive: bool,
+        truncation: &'a mut GitDiffTruncation,
+    ) -> Self {
+        Self {
+            context,
+            case_sensitive,
+            truncation,
+            files: Vec::new(),
+            current_file: None,
+            current_hunk: None,
+            skip_current_file: false,
+        }
+    }
+
+    fn parse_line(&mut self, line: &str) {
+        if let Some((old_repo_path, new_repo_path)) = parse_diff_git_paths(line) {
+            self.finish_file();
+            if self.files.len() >= self.truncation.max_files {
+                self.truncation.is_truncated = true;
+                self.truncation.omitted_file_count += 1;
+                self.skip_current_file = true;
+                return;
+            }
+
+            self.current_file = diff_file_for_paths(
+                self.context,
+                &old_repo_path,
+                &new_repo_path,
+                self.case_sensitive,
+            );
+            self.skip_current_file = self.current_file.is_none();
+            return;
+        }
+
+        if self.skip_current_file {
+            return;
+        }
+
+        if line.starts_with("new file mode ") {
+            self.set_change(GitDiffFileChangeKind::Added);
+            return;
+        }
+        if line.starts_with("deleted file mode ") {
+            self.set_change(GitDiffFileChangeKind::Deleted);
+            return;
+        }
+        if line.starts_with("similarity index ") {
+            self.set_change(GitDiffFileChangeKind::Renamed);
+            return;
+        }
+        if let Some(path) = line.strip_prefix("rename from ") {
+            self.set_previous_path(path);
+            self.set_change(GitDiffFileChangeKind::Renamed);
+            return;
+        }
+        if let Some(path) = line.strip_prefix("rename to ") {
+            self.set_current_path(path);
+            self.set_change(GitDiffFileChangeKind::Renamed);
+            return;
+        }
+        if let Some(path) = line.strip_prefix("copy from ") {
+            self.set_previous_path(path);
+            self.set_change(GitDiffFileChangeKind::Copied);
+            return;
+        }
+        if let Some(path) = line.strip_prefix("copy to ") {
+            self.set_current_path(path);
+            self.set_change(GitDiffFileChangeKind::Copied);
+            return;
+        }
+        if line.starts_with("Binary files ") || line == "GIT binary patch" {
+            if let Some(file) = self.current_file.as_mut() {
+                file.is_binary = true;
+                file.content_kind = GitDiffContentKind::Binary;
+                file.hunks.clear();
+            }
+            self.current_hunk = None;
+            return;
+        }
+        if line.starts_with("--- ") {
+            if line == "--- /dev/null" {
+                self.set_change(GitDiffFileChangeKind::Added);
+            }
+            return;
+        }
+        if line.starts_with("+++ ") {
+            if line == "+++ /dev/null" {
+                self.set_change(GitDiffFileChangeKind::Deleted);
+            }
+            return;
+        }
+        if line.starts_with("@@ ") {
+            self.start_hunk(line);
+            return;
+        }
+
+        if line.starts_with('\\') {
+            return;
+        }
+
+        self.parse_hunk_line(line);
+    }
+
+    fn finish(mut self) -> Vec<GitDiffFile> {
+        self.finish_file();
+        self.truncation.included_file_count = self.files.len();
+        self.truncation.is_truncated |= self.truncation.omitted_file_count > 0
+            || self.truncation.omitted_line_count > 0
+            || self.truncation.omitted_byte_count > 0;
+        self.files
+    }
+
+    fn finish_file(&mut self) {
+        self.finish_hunk();
+        if let Some(file) = self.current_file.take() {
+            self.files.push(file);
+        }
+    }
+
+    fn finish_hunk(&mut self) {
+        let Some(builder) = self.current_hunk.take() else {
+            return;
+        };
+        if builder.should_store_lines {
+            if let Some(file) = self.current_file.as_mut() {
+                file.hunks.push(builder.hunk);
+            }
+        }
+    }
+
+    fn set_change(&mut self, change: GitDiffFileChangeKind) {
+        if let Some(file) = self.current_file.as_mut() {
+            file.change = change;
+        }
+    }
+
+    fn set_previous_path(&mut self, repo_path: &str) {
+        if let (Some(file), Some(path)) = (
+            self.current_file.as_mut(),
+            repo_path_to_workspace_relative(self.context, repo_path),
+        ) {
+            file.previous_relative_path = Some(path);
+            refresh_diff_content_kind(file, self.case_sensitive);
+        }
+    }
+
+    fn set_current_path(&mut self, repo_path: &str) {
+        if let (Some(file), Some(path)) = (
+            self.current_file.as_mut(),
+            repo_path_to_workspace_relative(self.context, repo_path),
+        ) {
+            file.relative_path = path;
+            refresh_diff_content_kind(file, self.case_sensitive);
+        }
+    }
+
+    fn start_hunk(&mut self, line: &str) {
+        self.finish_hunk();
+
+        let Some(parsed) = parse_hunk_header(line) else {
+            return;
+        };
+
+        let should_store_lines = self.current_file.as_ref().is_some_and(|file| {
+            file.content_kind == GitDiffContentKind::Text
+                && file.hunks.len() < self.truncation.max_hunks_per_file
+                && self.truncation.included_line_count < self.truncation.max_lines
+        });
+
+        if !should_store_lines {
+            if let Some(file) = self.current_file.as_mut() {
+                if file.content_kind == GitDiffContentKind::Text {
+                    file.truncated = true;
+                    self.truncation.is_truncated = true;
+                }
+            }
+        }
+
+        self.current_hunk = Some(GitDiffHunkBuilder {
+            next_old_line: parsed.old_start,
+            next_new_line: parsed.new_start,
+            should_store_lines,
+            hunk: GitDiffHunk {
+                old_start: parsed.old_start,
+                old_lines: parsed.old_lines,
+                new_start: parsed.new_start,
+                new_lines: parsed.new_lines,
+                section_header: parsed.section_header,
+                lines: Vec::new(),
+            },
+        });
+    }
+
+    fn parse_hunk_line(&mut self, line: &str) {
+        let Some(builder) = self.current_hunk.as_mut() else {
+            return;
+        };
+        let Some(file) = self.current_file.as_mut() else {
+            return;
+        };
+
+        let Some(prefix) = line.as_bytes().first().copied() else {
+            return;
+        };
+        let content = &line[1.min(line.len())..];
+
+        match prefix {
+            b'+' => {
+                file.additions += 1;
+                let new_line_number = builder.next_new_line;
+                builder.next_new_line += 1;
+                push_diff_line(
+                    builder,
+                    file,
+                    self.truncation,
+                    GitDiffLineKind::Addition,
+                    None,
+                    Some(new_line_number),
+                    content,
+                );
+            }
+            b'-' => {
+                file.deletions += 1;
+                let old_line_number = builder.next_old_line;
+                builder.next_old_line += 1;
+                push_diff_line(
+                    builder,
+                    file,
+                    self.truncation,
+                    GitDiffLineKind::Deletion,
+                    Some(old_line_number),
+                    None,
+                    content,
+                );
+            }
+            b' ' => {
+                let old_line_number = builder.next_old_line;
+                let new_line_number = builder.next_new_line;
+                builder.next_old_line += 1;
+                builder.next_new_line += 1;
+                push_diff_line(
+                    builder,
+                    file,
+                    self.truncation,
+                    GitDiffLineKind::Context,
+                    Some(old_line_number),
+                    Some(new_line_number),
+                    content,
+                );
+            }
+            _ => {}
+        }
+    }
+}
+
+fn push_diff_line(
+    builder: &mut GitDiffHunkBuilder,
+    file: &mut GitDiffFile,
+    truncation: &mut GitDiffTruncation,
+    kind: GitDiffLineKind,
+    old_line_number: Option<u32>,
+    new_line_number: Option<u32>,
+    content: &str,
+) {
+    if !builder.should_store_lines {
+        return;
+    }
+
+    if truncation.included_line_count >= truncation.max_lines {
+        file.truncated = true;
+        builder.should_store_lines = false;
+        truncation.is_truncated = true;
+        truncation.omitted_line_count += 1;
+        return;
+    }
+
+    builder.hunk.lines.push(GitDiffLine {
+        kind,
+        old_line_number,
+        new_line_number,
+        content: content.to_owned(),
+    });
+    truncation.included_line_count += 1;
+}
+
+fn diff_file_for_paths(
+    context: &RepositoryContext,
+    old_repo_path: &str,
+    new_repo_path: &str,
+    case_sensitive: bool,
+) -> Option<GitDiffFile> {
+    let previous_relative_path = repo_path_to_workspace_relative(context, old_repo_path);
+    let relative_path = repo_path_to_workspace_relative(context, new_repo_path)
+        .or_else(|| previous_relative_path.clone())?;
+    let previous_relative_path =
+        if previous_relative_path.as_deref() == Some(relative_path.as_str()) {
+            None
+        } else {
+            previous_relative_path
+        };
+    let mut file = GitDiffFile {
+        relative_path,
+        previous_relative_path,
+        change: GitDiffFileChangeKind::Modified,
+        content_kind: GitDiffContentKind::UnsupportedResource,
+        is_binary: false,
+        additions: 0,
+        deletions: 0,
+        hunks: Vec::new(),
+        truncated: false,
+    };
+    refresh_diff_content_kind(&mut file, case_sensitive);
+    Some(file)
+}
+
+fn refresh_diff_content_kind(file: &mut GitDiffFile, case_sensitive: bool) {
+    if file.is_binary {
+        file.content_kind = GitDiffContentKind::Binary;
+    } else if is_workspace_visible_markdown(&file.relative_path, case_sensitive)
+        || file
+            .previous_relative_path
+            .as_deref()
+            .is_some_and(|path| is_workspace_visible_markdown(path, case_sensitive))
+    {
+        file.content_kind = GitDiffContentKind::Text;
+    } else {
+        file.content_kind = GitDiffContentKind::UnsupportedResource;
+        file.hunks.clear();
+    }
+}
+
+fn parse_diff_git_paths(line: &str) -> Option<(String, String)> {
+    let rest = line.strip_prefix("diff --git old/")?;
+    let split_at = rest.find(" new/")?;
+    let old_path = &rest[..split_at];
+    let new_path = &rest[split_at + " new/".len()..];
+    Some((old_path.to_owned(), new_path.to_owned()))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedHunkHeader {
+    old_start: u32,
+    old_lines: u32,
+    new_start: u32,
+    new_lines: u32,
+    section_header: Option<String>,
+}
+
+fn parse_hunk_header(line: &str) -> Option<ParsedHunkHeader> {
+    let rest = line.strip_prefix("@@ -")?;
+    let (old_range, rest) = rest.split_once(" +")?;
+    let (new_range, section) = rest.split_once(" @@")?;
+    let (old_start, old_lines) = parse_hunk_range(old_range)?;
+    let (new_start, new_lines) = parse_hunk_range(new_range)?;
+    let section_header = section
+        .strip_prefix(' ')
+        .filter(|section| !section.is_empty())
+        .map(str::to_owned);
+
+    Some(ParsedHunkHeader {
+        old_start,
+        old_lines,
+        new_start,
+        new_lines,
+        section_header,
+    })
+}
+
+fn parse_hunk_range(value: &str) -> Option<(u32, u32)> {
+    if let Some((start, count)) = value.split_once(',') {
+        Some((start.parse().ok()?, count.parse().ok()?))
+    } else {
+        Some((value.parse().ok()?, 1))
+    }
+}
+
 fn empty_status_summary(
     record: &WorkspaceRecord,
     repository_state: GitRepositoryState,
@@ -1430,8 +2227,19 @@ fn git_error_from_output(operation: GitServiceOperation, output: &Output) -> Git
         || lower.contains("empty ident name")
     {
         GitOperationErrorCode::IdentityMissing
-    } else if lower.contains("nothing to commit") {
+    } else if lower.contains("nothing to commit")
+        || lower.contains("does not have any commits yet")
+        || (lower.contains("your current branch") && lower.contains("does not have any commits"))
+    {
         GitOperationErrorCode::NoChanges
+    } else if lower.contains("needed a single revision")
+        || lower.contains("unknown revision")
+        || lower.contains("bad revision")
+        || lower.contains("ambiguous argument")
+        || lower.contains("invalid object name")
+        || lower.contains("not a valid object name")
+    {
+        GitOperationErrorCode::InvalidRef
     } else if lower.contains("not a git repository") {
         GitOperationErrorCode::NotRepository
     } else if lower.contains("not a gitdir")
@@ -1697,6 +2505,21 @@ mod tests {
         }
     }
 
+    fn diff_truncation_for_tests() -> GitDiffTruncation {
+        GitDiffTruncation {
+            is_truncated: false,
+            max_bytes: MAX_DIFF_BYTES,
+            max_files: MAX_DIFF_FILES,
+            max_lines: MAX_DIFF_LINES,
+            max_hunks_per_file: MAX_DIFF_HUNKS_PER_FILE,
+            included_file_count: 0,
+            omitted_file_count: 0,
+            included_line_count: 0,
+            omitted_line_count: 0,
+            omitted_byte_count: 0,
+        }
+    }
+
     #[test]
     fn normalizes_porcelain_status_to_workspace_entries_and_counts() {
         let temp = tempfile::tempdir().unwrap();
@@ -1727,6 +2550,87 @@ mod tests {
         assert_eq!(counts.modified, 1);
         assert_eq!(counts.untracked, 1);
         assert_eq!(counts.renamed, 1);
+    }
+
+    #[test]
+    fn parses_structured_diff_and_suppresses_unsupported_resource_hunks() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = RepositoryContext {
+            repository_root: temp.path().to_path_buf(),
+            workspace_prefix_in_repo: None,
+            repository_prefix_in_workspace: None,
+        };
+        let patch = "\
+diff --git old/notes/idea.md new/notes/idea.md
+index 1111111..2222222 100644
+--- old/notes/idea.md
++++ new/notes/idea.md
+@@ -1,2 +1,2 @@
+ # Idea
+-old thought
++new thought
+diff --git old/assets/data.txt new/assets/data.txt
+index 3333333..4444444 100644
+--- old/assets/data.txt
++++ new/assets/data.txt
+@@ -1 +1 @@
+-secret old
++secret new
+diff --git old/assets/blob.bin new/assets/blob.bin
+index 5555555..6666666 100644
+Binary files old/assets/blob.bin and new/assets/blob.bin differ
+";
+        let mut truncation = diff_truncation_for_tests();
+
+        let files = parse_diff_patch(&context, patch, true, &mut truncation);
+
+        assert_eq!(files.len(), 3);
+        assert_eq!(files[0].relative_path, "notes/idea.md");
+        assert_eq!(files[0].content_kind, GitDiffContentKind::Text);
+        assert_eq!(files[0].additions, 1);
+        assert_eq!(files[0].deletions, 1);
+        assert_eq!(files[0].hunks[0].lines[1].kind, GitDiffLineKind::Deletion);
+        assert_eq!(files[0].hunks[0].lines[1].old_line_number, Some(2));
+        assert_eq!(files[0].hunks[0].lines[2].new_line_number, Some(2));
+        assert_eq!(files[1].relative_path, "assets/data.txt");
+        assert_eq!(
+            files[1].content_kind,
+            GitDiffContentKind::UnsupportedResource
+        );
+        assert!(files[1].hunks.is_empty());
+        assert_eq!(files[1].additions, 1);
+        assert_eq!(files[1].deletions, 1);
+        assert_eq!(files[2].content_kind, GitDiffContentKind::Binary);
+        assert!(files[2].is_binary);
+        assert!(files[2].hunks.is_empty());
+    }
+
+    #[test]
+    fn marks_large_markdown_diff_as_truncated() {
+        let temp = tempfile::tempdir().unwrap();
+        let context = RepositoryContext {
+            repository_root: temp.path().to_path_buf(),
+            workspace_prefix_in_repo: None,
+            repository_prefix_in_workspace: None,
+        };
+        let mut patch = String::from(
+            "diff --git old/large.md new/large.md\n--- old/large.md\n+++ new/large.md\n@@ -1,1 +1,4 @@\n",
+        );
+        for index in 0..4 {
+            patch.push_str(&format!("+line {index}\n"));
+        }
+        let mut truncation = GitDiffTruncation {
+            max_lines: 2,
+            ..diff_truncation_for_tests()
+        };
+
+        let files = parse_diff_patch(&context, &patch, true, &mut truncation);
+
+        assert_eq!(files.len(), 1);
+        assert!(files[0].truncated);
+        assert!(truncation.is_truncated);
+        assert_eq!(truncation.included_line_count, 2);
+        assert!(truncation.omitted_line_count > 0);
     }
 
     #[test]
@@ -1850,6 +2754,236 @@ mod tests {
             .entries
             .iter()
             .any(|entry| entry.previous_relative_path.as_deref() == Some("old.md")));
+    }
+
+    #[test]
+    fn lists_workspace_and_file_history_with_rename_following() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        fs::write(temp.path().join("asset.bin"), b"\0one").unwrap();
+        commit_all(temp.path(), "Initial snapshot");
+        fs::write(temp.path().join("idea.md"), "# Idea\nSecond\n").unwrap();
+        commit_all(temp.path(), "Expand idea");
+        git(temp.path(), &["mv", "idea.md", "renamed.md"]);
+        commit_all(temp.path(), "Rename idea");
+        let record = record_for(temp.path());
+
+        let history = service()
+            .list_history(
+                &record,
+                GitHistoryRequest {
+                    workspace_id: record.info.id.clone(),
+                    relative_path: None,
+                    max_entries: Some(10),
+                },
+            )
+            .unwrap();
+        let file_history = service()
+            .list_history(
+                &record,
+                GitHistoryRequest {
+                    workspace_id: record.info.id.clone(),
+                    relative_path: Some("renamed.md".to_owned()),
+                    max_entries: Some(10),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].subject, "Rename idea");
+        assert_eq!(history[0].short_commit_oid.len(), 12);
+        assert!(history[0].affected_file_count >= 1);
+        assert_eq!(
+            file_history
+                .iter()
+                .map(|entry| entry.subject.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Rename idea", "Expand idea", "Initial snapshot"]
+        );
+    }
+
+    #[test]
+    fn returns_file_not_in_history_for_missing_file_history() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        commit_all(temp.path(), "Initial snapshot");
+        let record = record_for(temp.path());
+
+        let error = service()
+            .list_history(
+                &record,
+                GitHistoryRequest {
+                    workspace_id: record.info.id.clone(),
+                    relative_path: Some("missing.md".to_owned()),
+                    max_entries: Some(10),
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::FileNotInHistory);
+        assert_eq!(error.relative_path.as_deref(), Some("missing.md"));
+    }
+
+    #[test]
+    fn diffs_current_markdown_against_historical_commit() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\nold thought\n").unwrap();
+        commit_all(temp.path(), "Initial snapshot");
+        let initial = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Idea\nnew thought\n").unwrap();
+        let record = record_for(temp.path());
+
+        let result = service()
+            .diff(
+                &record,
+                GitDiffRequest {
+                    workspace_id: record.info.id.clone(),
+                    mode: GitDiffMode::WorkingTree,
+                    relative_path: Some("idea.md".to_owned()),
+                    base_ref: Some(initial),
+                    head_ref: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(result.file_count, 1);
+        assert_eq!(result.files[0].content_kind, GitDiffContentKind::Text);
+        assert_eq!(result.files[0].additions, 1);
+        assert_eq!(result.files[0].deletions, 1);
+        assert!(result.files[0]
+            .hunks
+            .iter()
+            .flat_map(|hunk| hunk.lines.iter())
+            .any(|line| line.kind == GitDiffLineKind::Addition && line.content == "new thought"));
+    }
+
+    #[test]
+    fn diffs_commit_to_commit_renames() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        commit_all(temp.path(), "Initial snapshot");
+        let initial = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        git(temp.path(), &["mv", "idea.md", "renamed.md"]);
+        commit_all(temp.path(), "Rename idea");
+        let renamed = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        let record = record_for(temp.path());
+
+        let result = service()
+            .diff(
+                &record,
+                GitDiffRequest {
+                    workspace_id: record.info.id.clone(),
+                    mode: GitDiffMode::RefRange,
+                    relative_path: None,
+                    base_ref: Some(initial),
+                    head_ref: Some(renamed),
+                },
+            )
+            .unwrap();
+
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].change, GitDiffFileChangeKind::Renamed);
+        assert_eq!(result.files[0].relative_path, "renamed.md");
+        assert_eq!(
+            result.files[0].previous_relative_path.as_deref(),
+            Some("idea.md")
+        );
+    }
+
+    #[test]
+    fn returns_invalid_ref_for_unknown_diff_base() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        commit_all(temp.path(), "Initial snapshot");
+        let record = record_for(temp.path());
+
+        let error = service()
+            .diff(
+                &record,
+                GitDiffRequest {
+                    workspace_id: record.info.id.clone(),
+                    mode: GitDiffMode::WorkingTree,
+                    relative_path: Some("idea.md".to_owned()),
+                    base_ref: Some("missing-ref".to_owned()),
+                    head_ref: None,
+                },
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::InvalidRef);
+    }
+
+    #[test]
+    fn represents_binary_diff_as_metadata_without_hunks() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("asset.bin"), b"\0one").unwrap();
+        commit_all(temp.path(), "Initial binary");
+        let initial = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("asset.bin"), b"\0two").unwrap();
+        let record = record_for(temp.path());
+
+        let result = service()
+            .diff(
+                &record,
+                GitDiffRequest {
+                    workspace_id: record.info.id.clone(),
+                    mode: GitDiffMode::WorkingTree,
+                    relative_path: Some("asset.bin".to_owned()),
+                    base_ref: Some(initial),
+                    head_ref: None,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(result.files.len(), 1);
+        assert_eq!(result.files[0].content_kind, GitDiffContentKind::Binary);
+        assert!(result.files[0].is_binary);
+        assert!(result.files[0].hunks.is_empty());
+    }
+
+    #[test]
+    fn truncates_large_markdown_diff_results() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("large.md"), "# Large\n").unwrap();
+        commit_all(temp.path(), "Initial large file");
+        let initial = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        let body = (0..2_500)
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(temp.path().join("large.md"), format!("# Large\n{body}\n")).unwrap();
+        let record = record_for(temp.path());
+
+        let result = service()
+            .diff(
+                &record,
+                GitDiffRequest {
+                    workspace_id: record.info.id.clone(),
+                    mode: GitDiffMode::WorkingTree,
+                    relative_path: Some("large.md".to_owned()),
+                    base_ref: Some(initial),
+                    head_ref: None,
+                },
+            )
+            .unwrap();
+
+        assert!(result.truncation.is_truncated);
+        assert_eq!(result.truncation.included_line_count, MAX_DIFF_LINES);
+        assert!(result.files[0].truncated);
     }
 
     #[test]

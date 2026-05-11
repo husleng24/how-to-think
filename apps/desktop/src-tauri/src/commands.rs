@@ -7,8 +7,9 @@ use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
 use crate::git_contracts::{
-    GitOperationError, GitOperationErrorCode, GitRepositoryState, GitServiceOperation,
-    GitSnapshotRequest, GitSnapshotResult, GitStatusSummary,
+    GitDiffRequest, GitDiffResult, GitHistoryEntry, GitHistoryRequest, GitOperationError,
+    GitOperationErrorCode, GitRepositoryState, GitServiceOperation, GitSnapshotRequest,
+    GitSnapshotResult, GitStatusSummary,
 };
 use crate::git_service;
 use crate::links::index::WorkspaceLinkIndex;
@@ -387,6 +388,28 @@ pub fn git_create_snapshot(
     let record = workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::SaveFile)
         .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Snapshot, error))?;
     git_service::create_snapshot(&record, request)
+}
+
+#[tauri::command]
+pub fn git_history(
+    app: AppHandle,
+    request: GitHistoryRequest,
+) -> Result<Vec<GitHistoryEntry>, GitOperationError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::ListFiles)
+            .map_err(|error| workspace_error_to_git_error(GitServiceOperation::History, error))?;
+    git_service::list_git_history(&record, request)
+}
+
+#[tauri::command]
+pub fn git_diff(
+    app: AppHandle,
+    request: GitDiffRequest,
+) -> Result<GitDiffResult, GitOperationError> {
+    let record =
+        workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::ListFiles)
+            .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Diff, error))?;
+    git_service::get_git_diff(&record, request)
 }
 
 fn settings_store(

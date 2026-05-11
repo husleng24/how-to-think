@@ -11,6 +11,8 @@ import {
   validateGitWorkspaceRelativePath,
 } from './index';
 import type {
+  GitDiffResult,
+  GitHistoryEntry,
   GitRepositoryState,
   GitRepositoryStateToken,
   GitRestoreRequest,
@@ -242,6 +244,86 @@ describe('Git service contract', () => {
     expect(status.counts.modified).toBe(1);
     expect(result.shortCommitOid).toHaveLength(12);
     expect(result.affectedPaths).toEqual(['notes/idea.md']);
+  });
+
+  it('models history entries with short commit ids and affected file counts', () => {
+    const entry: GitHistoryEntry = {
+      commitOid: 'abcdef1234567890abcdef1234567890abcdef12',
+      shortCommitOid: 'abcdef123456',
+      parentOids: ['1111111111111111111111111111111111111111'],
+      authorName: 'Test User',
+      authorEmail: 'test@example.invalid',
+      authoredAt: '2026-05-11T00:00:00+00:00',
+      subject: 'Save idea',
+      touchedPaths: ['notes/idea.md'],
+      affectedFileCount: 1,
+    };
+
+    expect(entry.shortCommitOid).toHaveLength(12);
+    expect(entry.touchedPaths).toEqual(['notes/idea.md']);
+  });
+
+  it('models structured UI-ready Git diffs without raw patch parsing', () => {
+    const diff: GitDiffResult = {
+      workspaceId: 'workspace-1',
+      mode: 'working_tree',
+      relativePath: 'notes/idea.md',
+      baseRef: 'HEAD~1',
+      files: [
+        {
+          relativePath: 'notes/idea.md',
+          change: 'modified',
+          contentKind: 'text',
+          isBinary: false,
+          additions: 1,
+          deletions: 1,
+          truncated: false,
+          hunks: [
+            {
+              oldStart: 1,
+              oldLines: 2,
+              newStart: 1,
+              newLines: 2,
+              lines: [
+                {
+                  kind: 'deletion',
+                  oldLineNumber: 2,
+                  content: 'old thought',
+                },
+                {
+                  kind: 'addition',
+                  newLineNumber: 2,
+                  content: 'new thought',
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      fileCount: 1,
+      additions: 1,
+      deletions: 1,
+      changedLineCount: 2,
+      truncation: {
+        isTruncated: false,
+        maxBytes: 524288,
+        maxFiles: 100,
+        maxLines: 2000,
+        maxHunksPerFile: 200,
+        includedFileCount: 1,
+        omittedFileCount: 0,
+        includedLineCount: 2,
+        omittedLineCount: 0,
+        omittedByteCount: 0,
+      },
+      generatedAt: '2026-05-11T00:00:01.000Z',
+    };
+
+    expect(diff.files[0].hunks[0].lines.map((line) => line.kind)).toEqual([
+      'deletion',
+      'addition',
+    ]);
+    expect(diff.changedLineCount).toBe(2);
   });
 
   it('detects stale repository tokens across head, index, and worktree generation changes', () => {

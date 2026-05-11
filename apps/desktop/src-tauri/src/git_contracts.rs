@@ -96,6 +96,32 @@ pub enum GitDiffMode {
     RefRange,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitDiffFileChangeKind {
+    Added,
+    Modified,
+    Deleted,
+    Renamed,
+    Copied,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitDiffContentKind {
+    Text,
+    Binary,
+    UnsupportedResource,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GitDiffLineKind {
+    Context,
+    Addition,
+    Deletion,
+}
+
 pub const GIT_OPERATION_ERROR_CODES: &[GitOperationErrorCode] = &[
     GitOperationErrorCode::GitUnavailable,
     GitOperationErrorCode::NotRepository,
@@ -281,12 +307,14 @@ pub struct GitHistoryRequest {
 #[serde(rename_all = "camelCase")]
 pub struct GitHistoryEntry {
     pub commit_oid: String,
+    pub short_commit_oid: String,
     pub parent_oids: Vec<String>,
     pub author_name: String,
     pub author_email: String,
     pub authored_at: IsoDateTime,
     pub subject: String,
     pub touched_paths: Vec<WorkspaceRelativePath>,
+    pub affected_file_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -313,9 +341,66 @@ pub struct GitDiffResult {
     pub base_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub head_ref: Option<String>,
-    pub patch: String,
-    pub is_binary: bool,
+    pub files: Vec<GitDiffFile>,
+    pub file_count: usize,
+    pub additions: usize,
+    pub deletions: usize,
     pub changed_line_count: usize,
+    pub truncation: GitDiffTruncation,
+    pub generated_at: IsoDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffFile {
+    pub relative_path: WorkspaceRelativePath,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_relative_path: Option<WorkspaceRelativePath>,
+    pub change: GitDiffFileChangeKind,
+    pub content_kind: GitDiffContentKind,
+    pub is_binary: bool,
+    pub additions: usize,
+    pub deletions: usize,
+    pub hunks: Vec<GitDiffHunk>,
+    pub truncated: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffHunk {
+    pub old_start: u32,
+    pub old_lines: u32,
+    pub new_start: u32,
+    pub new_lines: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub section_header: Option<String>,
+    pub lines: Vec<GitDiffLine>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffLine {
+    pub kind: GitDiffLineKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_line_number: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_line_number: Option<u32>,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitDiffTruncation {
+    pub is_truncated: bool,
+    pub max_bytes: usize,
+    pub max_files: usize,
+    pub max_lines: usize,
+    pub max_hunks_per_file: usize,
+    pub included_file_count: usize,
+    pub omitted_file_count: usize,
+    pub included_line_count: usize,
+    pub omitted_line_count: usize,
+    pub omitted_byte_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

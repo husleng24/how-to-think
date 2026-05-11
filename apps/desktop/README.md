@@ -43,6 +43,15 @@ npm run tauri:build
 - `tauri:dev` launches the native desktop shell against the Vite dev server.
 - `tauri:build` builds the native desktop app bundle.
 
+## Git Backend Commands
+
+The desktop shell exposes read-only Git history and diff commands through Tauri:
+
+- `git_history` accepts a `GitHistoryRequest` for whole-workspace history or a single workspace-relative path. File history uses `git log --follow` for one selected path, so rename following is available where system Git can resolve it.
+- `git_diff` accepts a `GitDiffRequest` for `working_tree`, `staged`, or `ref_range` comparisons. Markdown file changes return structured file, hunk, and line DTOs; binary and unsupported resource changes return metadata only.
+
+Diff responses are bounded by backend byte, file, hunk, and line limits and include explicit truncation metadata when content is omitted.
+
 ## Core Editor Validation
 
 Run these commands from the repository root before reporting editor implementation completion:

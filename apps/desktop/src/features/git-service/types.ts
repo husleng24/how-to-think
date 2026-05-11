@@ -62,6 +62,9 @@ export type GitStatusChangeKind =
   | 'unknown';
 
 export type GitDiffMode = 'working_tree' | 'staged' | 'ref_range';
+export type GitDiffFileChangeKind = 'added' | 'modified' | 'deleted' | 'renamed' | 'copied';
+export type GitDiffContentKind = 'text' | 'binary' | 'unsupported_resource';
+export type GitDiffLineKind = 'context' | 'addition' | 'deletion';
 
 export interface GitBackendInfo {
   kind: GitBackendKind;
@@ -168,12 +171,14 @@ export interface GitHistoryRequest {
 
 export interface GitHistoryEntry {
   commitOid: string;
+  shortCommitOid: string;
   parentOids: readonly string[];
   authorName: string;
   authorEmail: string;
   authoredAt: IsoDateTime;
   subject: string;
   touchedPaths: readonly WorkspaceRelativePath[];
+  affectedFileCount: number;
 }
 
 export interface GitDiffRequest {
@@ -190,9 +195,54 @@ export interface GitDiffResult {
   relativePath?: WorkspaceRelativePath | null;
   baseRef?: string | null;
   headRef?: string | null;
-  patch: string;
-  isBinary: boolean;
+  files: readonly GitDiffFile[];
+  fileCount: number;
+  additions: number;
+  deletions: number;
   changedLineCount: number;
+  truncation: GitDiffTruncation;
+  generatedAt: IsoDateTime;
+}
+
+export interface GitDiffFile {
+  relativePath: WorkspaceRelativePath;
+  previousRelativePath?: WorkspaceRelativePath | null;
+  change: GitDiffFileChangeKind;
+  contentKind: GitDiffContentKind;
+  isBinary: boolean;
+  additions: number;
+  deletions: number;
+  hunks: readonly GitDiffHunk[];
+  truncated: boolean;
+}
+
+export interface GitDiffHunk {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  sectionHeader?: string | null;
+  lines: readonly GitDiffLine[];
+}
+
+export interface GitDiffLine {
+  kind: GitDiffLineKind;
+  oldLineNumber?: number | null;
+  newLineNumber?: number | null;
+  content: string;
+}
+
+export interface GitDiffTruncation {
+  isTruncated: boolean;
+  maxBytes: number;
+  maxFiles: number;
+  maxLines: number;
+  maxHunksPerFile: number;
+  includedFileCount: number;
+  omittedFileCount: number;
+  includedLineCount: number;
+  omittedLineCount: number;
+  omittedByteCount: number;
 }
 
 export interface GitRestoreRequest {
