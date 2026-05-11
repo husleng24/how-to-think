@@ -1,4 +1,5 @@
 import type {
+  DocumentSnapshot,
   FileVersion,
   IsoDateTime,
   WorkspaceId,
@@ -251,6 +252,7 @@ export interface GitRestoreRequest {
   sourceRef: string;
   expectedRepoToken: GitRepositoryStateToken;
   expectedFileVersion: FileVersion;
+  editorHasUnsavedChanges: boolean;
   dryRun?: boolean;
 }
 
@@ -258,6 +260,7 @@ export interface GitRestoreResult {
   workspaceId: WorkspaceId;
   relativePath: WorkspaceRelativePath;
   restoredFrom: string;
+  snapshot: DocumentSnapshot;
   fileVersion: FileVersion;
   repositoryState: GitRepositoryState;
   status: GitStatusSummary;
@@ -305,6 +308,7 @@ export interface GitRequestValidationIssue {
     | 'expected_file_version_required'
     | 'unsafe_scope_path'
     | 'source_ref_required'
+    | 'unsaved_editor_changes'
     | 'snapshot_message_required';
   message: string;
   relativePath?: WorkspaceRelativePath;

@@ -60,6 +60,31 @@ export function mapWorkspaceError(error: unknown): UserMessage {
         detail: 'Free disk space and try saving again.',
         relativePath,
       };
+    case 'restore_conflict':
+      return {
+        title: 'Restore blocked',
+        detail: pathDetail(relativePath, workspaceError.message || 'Resolve the active file conflict before restoring.'),
+        relativePath,
+      };
+    case 'external_state_changed':
+      return {
+        title: 'Git state changed',
+        detail: 'Refresh Git status and try the restore again.',
+        relativePath,
+      };
+    case 'invalid_ref':
+    case 'file_not_in_history':
+      return {
+        title: 'Git version unavailable',
+        detail: pathDetail(relativePath, workspaceError.message || 'Choose another history entry.'),
+        relativePath,
+      };
+    case 'merge_conflict':
+      return {
+        title: 'Merge conflict active',
+        detail: 'Resolve the Git conflict before restoring a historical file.',
+        relativePath,
+      };
     default:
       return {
         title: 'Action failed',

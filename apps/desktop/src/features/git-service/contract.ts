@@ -280,6 +280,14 @@ export function validateGitRestoreRequestContract(
     });
   }
 
+  if (request.editorHasUnsavedChanges) {
+    issues.push({
+      code: 'unsaved_editor_changes',
+      message: 'Restore requests must not proceed while the editor has unsaved changes.',
+      relativePath: request.relativePath,
+    });
+  }
+
   if (request.relativePath !== undefined) {
     const result = validateGitWorkspaceRelativePath(request.relativePath);
     if (!result.ok) {

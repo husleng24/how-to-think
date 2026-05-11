@@ -14,6 +14,7 @@ import {
 } from './lifecycleStore';
 import type {
   PendingDocumentAction,
+  RestoreActiveFromGitInput,
   WorkspaceCommands,
   WorkspaceLifecycleState,
 } from './types';
@@ -32,6 +33,7 @@ export interface WorkspaceLifecycleActions {
   requestRenameActive(newRelativePath: WorkspaceRelativePath): Promise<void>;
   requestDeleteActive(): Promise<void>;
   requestCloseActive(): void;
+  restoreActiveFromGit(input: RestoreActiveFromGitInput): Promise<boolean>;
   continuePromptAfterSave(): Promise<void>;
   discardPrompt(): Promise<void>;
   cancelPrompt(): void;
@@ -275,6 +277,57 @@ export function useWorkspaceLifecycle(
     [commands],
   );
 
+  const restoreActiveFromGit = useCallback(
+    async (input: RestoreActiveFromGitInput) => {
+      const current = stateRef.current;
+      const active = current.active;
+
+      if (!current.workspace || !active || active.inFlightSave) {
+        return false;
+      }
+
+      if (hasUnsavedChanges(current)) {
+        dispatch({
+          type: 'operation-failed',
+          error: {
+            code: 'restore_conflict',
+            operation: 'restore',
+            message: 'Restore is blocked while the editor has unsaved changes.',
+            recoverable: true,
+            relativePath: active.snapshot.relativePath,
+          },
+        });
+        return false;
+      }
+
+      dispatch({ type: 'operation-started' });
+
+      try {
+        const result = await commands.restoreMarkdownFromGit({
+          workspaceId: current.workspace.id,
+          relativePath: active.snapshot.relativePath,
+          sourceRef: input.sourceRef,
+          expectedRepoToken: input.expectedRepoToken,
+          expectedFileVersion: active.snapshot.version,
+          editorHasUnsavedChanges: false,
+        });
+        const payload = await openDocumentForEditor(commands, current.workspace.id, result.relativePath);
+
+        dispatch({
+          type: 'document-restored',
+          payload,
+          gitStatus: result.status,
+        });
+        await commands.rememberLastOpenedFile(current.workspace.id, result.relativePath);
+        return true;
+      } catch (error) {
+        dispatch({ type: 'operation-failed', error });
+        return false;
+      }
+    },
+    [commands],
+  );
+
   const actions = useMemo<WorkspaceLifecycleActions>(
     () => ({
       async openWorkspace(path) {
@@ -342,6 +395,8 @@ export function useWorkspaceLifecycle(
         dispatch({ type: 'document-closed' });
       },
 
+      restoreActiveFromGit,
+
       async continuePromptAfterSave() {
         const prompt = stateRef.current.prompt;
 
@@ -378,7 +433,7 @@ export function useWorkspaceLifecycle(
 
       saveActive,
     }),
-    [commands, loadSession, performAction, saveActive],
+    [commands, loadSession, performAction, restoreActiveFromGit, saveActive],
   );
 
   return [state, actions];

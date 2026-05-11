@@ -12,6 +12,7 @@ import type {
   WorkspaceId,
   WorkspaceRelativePath,
 } from '../../types/markdownLifecycle';
+import type { GitRestoreResult } from '../git-service';
 import type {
   DeleteDocumentResult,
   DocumentExternalChangeStatus,
@@ -72,6 +73,10 @@ export const tauriWorkspaceCommands: WorkspaceCommands = {
 
   deleteMarkdownDocument(input) {
     return invoke<DeleteDocumentResult>('delete_markdown_document', input);
+  },
+
+  restoreMarkdownFromGit(input) {
+    return invoke<GitRestoreResult>('git_restore_file', { request: input });
   },
 
   rememberLastOpenedFile(workspaceId, relativePath) {

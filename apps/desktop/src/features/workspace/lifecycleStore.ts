@@ -28,6 +28,11 @@ export type WorkspaceLifecycleAction =
   | { type: 'files-refreshed'; files: WorkspaceFile[] }
   | { type: 'document-opened'; payload: OpenedDocumentPayload }
   | {
+      type: 'document-restored';
+      payload: OpenedDocumentPayload;
+      gitStatus: WorkspaceLifecycleState['gitStatus'];
+    }
+  | {
       type: 'document-edited';
       documentKey: string;
       editorDocument: EditorMindMapDocument;
@@ -61,6 +66,7 @@ export const initialWorkspaceLifecycleState: WorkspaceLifecycleState = {
     kind: 'saved',
     message: 'No file open',
   },
+  gitStatus: null,
   prompt: null,
   lastError: null,
   isBusy: false,
@@ -86,6 +92,7 @@ export function workspaceLifecycleReducer(
         files: [],
         active: null,
         saveStatus: noFileStatus(),
+        gitStatus: null,
         isBusy: false,
       };
 
@@ -97,6 +104,7 @@ export function workspaceLifecycleReducer(
         files: sortWorkspaceFiles(action.session.files),
         active: null,
         saveStatus: noFileStatus(),
+        gitStatus: null,
         lastError: null,
         isBusy: false,
       };
@@ -153,6 +161,36 @@ export function workspaceLifecycleReducer(
           message: 'Saved',
           savedAt: action.payload.result.snapshot.openedAt,
         },
+        prompt: null,
+        lastError: null,
+        isBusy: false,
+      };
+    }
+
+    case 'document-restored': {
+      const relativePath = action.payload.result.snapshot.relativePath;
+      const active: ActiveDocumentState = {
+        key: documentKey(relativePath, action.payload.result.snapshot.openedAt),
+        snapshot: action.payload.result.snapshot,
+        markdownDocument: action.payload.result.document,
+        editorDocument: action.payload.editorDocument,
+        linkIndex: action.payload.result.linkIndex,
+        savedContentRevision: action.payload.contentRevision,
+        contentRevision: action.payload.contentRevision,
+        inFlightSave: null,
+      };
+
+      return {
+        ...state,
+        active,
+        files: sortWorkspaceFiles(action.payload.result.files),
+        recentFiles: rememberRecentFile(state.recentFiles, relativePath),
+        saveStatus: {
+          kind: 'saved',
+          message: 'Restored from Git history',
+          savedAt: action.payload.result.snapshot.openedAt,
+        },
+        gitStatus: action.gitStatus,
         prompt: null,
         lastError: null,
         isBusy: false,

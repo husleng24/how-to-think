@@ -1,4 +1,6 @@
-use crate::models::{FileVersion, IsoDateTime, WorkspaceId, WorkspaceRelativePath};
+use crate::models::{
+    DocumentSnapshot, FileVersion, IsoDateTime, WorkspaceId, WorkspaceRelativePath,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -411,6 +413,8 @@ pub struct GitRestoreRequest {
     pub source_ref: String,
     pub expected_repo_token: GitRepositoryStateToken,
     pub expected_file_version: FileVersion,
+    #[serde(default)]
+    pub editor_has_unsaved_changes: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub dry_run: bool,
 }
@@ -421,6 +425,7 @@ pub struct GitRestoreResult {
     pub workspace_id: WorkspaceId,
     pub relative_path: WorkspaceRelativePath,
     pub restored_from: String,
+    pub snapshot: DocumentSnapshot,
     pub file_version: FileVersion,
     pub repository_state: GitRepositoryState,
     pub status: GitStatusSummary,
@@ -459,6 +464,16 @@ impl GitOperationError {
 
     pub fn with_relative_path(mut self, relative_path: impl Into<String>) -> Self {
         self.relative_path = Some(relative_path.into());
+        self
+    }
+
+    pub fn with_detail(mut self, key: impl Into<String>, value: impl Serialize) -> Self {
+        if let Ok(value) = serde_json::to_value(value) {
+            self.details
+                .get_or_insert_with(BTreeMap::new)
+                .insert(key.into(), value);
+        }
+
         self
     }
 }

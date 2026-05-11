@@ -86,6 +86,7 @@ pub fn run() {
             commands::git_create_snapshot,
             commands::git_history,
             commands::git_diff,
+            commands::git_restore_file,
             ai::providers::list_ai_providers,
             ai::providers::save_ai_provider,
             ai::providers::select_ai_provider,

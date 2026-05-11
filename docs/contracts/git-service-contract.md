@@ -106,8 +106,9 @@ restore:
 - `capturedAt`: ISO timestamp.
 
 Snapshot and restore requests must echo the last observed token. Restore also
-requires the current VIT-47 `FileVersion` for the target file. Snapshot requires
-expected file versions for the scoped files being captured.
+requires the current VIT-47 `FileVersion` for the target file and an explicit
+frontend dirty-editor flag; restore must be blocked when that flag is true.
+Snapshot requires expected file versions for the scoped files being captured.
 
 ## Status and Snapshot Result Shape
 
@@ -119,6 +120,10 @@ they are not eligible for snapshot staging.
 `GitSnapshotResult` returns the full commit oid, a short commit oid, parent
 oids, snapshot message, affected workspace-relative paths, affected file count,
 the refreshed repository state, and the refreshed status after commit creation.
+
+`GitRestoreResult` returns the historical source commit, the restored
+`DocumentSnapshot`, the new target `FileVersion`, the refreshed repository
+state, and the refreshed status after the working-tree write.
 
 ## Path Handling
 
@@ -162,7 +167,7 @@ block and Git-specific error mapping on top of that boundary.
 | snapshot | workspace-relative path validation, current `FileVersion` tokens for scoped files, writable checks |
 | history | workspace-relative path validation for optional path filters |
 | diff | workspace-relative path validation for optional path filters |
-| restore | workspace-relative path validation, current target `FileVersion`, conflict refusal before write |
+| restore | workspace-relative path validation, current target `FileVersion`, dirty editor state, conflict refusal before write |
 
 The Git contract does not bypass the Markdown lifecycle. Restore writes must
 still refuse stale file versions and return `external_state_changed` or

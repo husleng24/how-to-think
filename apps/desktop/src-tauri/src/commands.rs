@@ -9,8 +9,8 @@ use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
 use crate::git_contracts::{
     GitDiffRequest, GitDiffResult, GitHistoryEntry, GitHistoryRequest, GitOperationError,
-    GitOperationErrorCode, GitRepositoryState, GitServiceOperation, GitSnapshotRequest,
-    GitSnapshotResult, GitStatusSummary,
+    GitOperationErrorCode, GitRepositoryState, GitRestoreRequest, GitRestoreResult,
+    GitServiceOperation, GitSnapshotRequest, GitSnapshotResult, GitStatusSummary,
 };
 use crate::git_service;
 use crate::links::index::WorkspaceLinkIndex;
@@ -503,6 +503,16 @@ pub fn git_diff(
         workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::ListFiles)
             .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Diff, error))?;
     git_service::get_git_diff(&record, request)
+}
+
+#[tauri::command]
+pub fn git_restore_file(
+    app: AppHandle,
+    request: GitRestoreRequest,
+) -> Result<GitRestoreResult, GitOperationError> {
+    let record = workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::SaveFile)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Restore, error))?;
+    git_service::restore_git_file(&record, request)
 }
 
 fn write_desktop_export_artifact(

@@ -1,5 +1,11 @@
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import type {
+  GitRepositoryStateToken,
+  GitRestoreRequest,
+  GitRestoreResult,
+  GitStatusSummary,
+} from '../git-service';
+import type {
   CompatibilityDiagnostic,
   DocumentSnapshot,
   FileVersion,
@@ -163,6 +169,7 @@ export interface WorkspaceLifecycleState {
   active: ActiveDocumentState | null;
   recentFiles: WorkspaceRelativePath[];
   saveStatus: SaveStatus;
+  gitStatus: GitStatusSummary | null;
   prompt: UnsavedPromptState | null;
   lastError: UserMessage | null;
   isBusy: boolean;
@@ -220,6 +227,7 @@ export interface WorkspaceCommands {
     relativePath: WorkspaceRelativePath;
     expectedVersion?: FileVersion;
   }): Promise<DeleteDocumentResult>;
+  restoreMarkdownFromGit(input: GitRestoreRequest): Promise<GitRestoreResult>;
   rememberLastOpenedFile(
     workspaceId: WorkspaceId,
     relativePath: WorkspaceRelativePath,
@@ -229,4 +237,9 @@ export interface WorkspaceCommands {
     relativePath: WorkspaceRelativePath;
     expectedVersion: FileVersion;
   }): Promise<DocumentExternalChangeStatus>;
+}
+
+export interface RestoreActiveFromGitInput {
+  sourceRef: string;
+  expectedRepoToken: GitRepositoryStateToken;
 }

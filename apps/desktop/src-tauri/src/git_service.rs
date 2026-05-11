@@ -1,13 +1,18 @@
+use crate::documents;
+use crate::errors::{WorkspaceError, WorkspaceErrorCode};
 use crate::git_contracts::{
     is_repository_token_stale, validate_git_workspace_relative_path, GitAuthorIdentity,
     GitBackendInfo, GitBackendKind, GitDiffContentKind, GitDiffFile, GitDiffFileChangeKind,
     GitDiffHunk, GitDiffLine, GitDiffLineKind, GitDiffMode, GitDiffRequest, GitDiffResult,
     GitDiffTruncation, GitHistoryEntry, GitHistoryRequest, GitOperationError,
     GitOperationErrorCode, GitRepositoryState, GitRepositoryStateKind, GitRepositoryStateToken,
-    GitRepositoryWarning, GitServiceOperation, GitSnapshotRequest, GitSnapshotResult,
-    GitStatusChangeKind, GitStatusCounts, GitStatusEntry, GitStatusSummary,
+    GitRepositoryWarning, GitRestoreRequest, GitRestoreResult, GitServiceOperation,
+    GitSnapshotRequest, GitSnapshotResult, GitStatusChangeKind, GitStatusCounts, GitStatusEntry,
+    GitStatusSummary,
 };
-use crate::models::{IsoDateTime, WorkspaceRecord, WorkspaceRelativePath};
+use crate::models::{
+    DocumentSnapshot, IsoDateTime, SaveReason, SaveRequest, WorkspaceRecord, WorkspaceRelativePath,
+};
 use crate::path_guard::supported_markdown_extension;
 use crate::time_utils::now_iso;
 use sha2::{Digest, Sha256};
@@ -61,6 +66,13 @@ pub fn get_git_diff(
     request: GitDiffRequest,
 ) -> Result<GitDiffResult, GitOperationError> {
     GitRepositoryService::default().diff(record, request)
+}
+
+pub fn restore_git_file(
+    record: &WorkspaceRecord,
+    request: GitRestoreRequest,
+) -> Result<GitRestoreResult, GitOperationError> {
+    GitRepositoryService::default().restore_file(record, request)
 }
 
 #[derive(Debug, Clone)]
@@ -457,6 +469,122 @@ impl GitRepositoryService {
         })
     }
 
+    fn restore_file(
+        &self,
+        record: &WorkspaceRecord,
+        request: GitRestoreRequest,
+    ) -> Result<GitRestoreResult, GitOperationError> {
+        if request.workspace_id != record.info.id {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NotRepository,
+                GitServiceOperation::Restore,
+                "The restore request workspace id does not match the selected workspace.",
+                true,
+            ));
+        }
+
+        let relative_path =
+            validate_restore_path(&request.relative_path, record.info.case_sensitive)?;
+        if request.editor_has_unsaved_changes {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::RestoreConflict,
+                GitServiceOperation::Restore,
+                "Restore is blocked while the editor has unsaved changes.",
+                true,
+            )
+            .with_relative_path(relative_path));
+        }
+
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::Restore)?;
+        self.ensure_restore_state(&repository_state)?;
+
+        if is_repository_token_stale(
+            Some(&request.expected_repo_token),
+            repository_state.token.as_ref(),
+        ) {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::ExternalStateChanged,
+                GitServiceOperation::Restore,
+                "The repository changed after the UI last refreshed Git status.",
+                true,
+            )
+            .with_relative_path(relative_path));
+        }
+
+        let context = repository_context(record, &repository_state, GitServiceOperation::Restore)?;
+        let repo_path =
+            workspace_path_to_repo_relative(&context, &relative_path).ok_or_else(|| {
+                GitOperationError::new(
+                    GitOperationErrorCode::FileNotInHistory,
+                    GitServiceOperation::Restore,
+                    "The requested file is outside the addressable Git repository scope.",
+                    true,
+                )
+                .with_relative_path(relative_path.clone())
+            })?;
+        let restored_from =
+            self.resolve_restore_source_ref(&context.repository_root, &request.source_ref)?;
+        let restored_content = self.read_historical_markdown_blob(
+            &context.repository_root,
+            &restored_from,
+            &repo_path,
+            &relative_path,
+        )?;
+
+        let expected_file_version = request.expected_file_version;
+        let (snapshot, file_version) = if request.dry_run {
+            let snapshot = documents::open_document(record, &relative_path)
+                .map_err(workspace_error_to_restore_error)?;
+            if snapshot.version != expected_file_version {
+                return Err(GitOperationError::new(
+                    GitOperationErrorCode::RestoreConflict,
+                    GitServiceOperation::Restore,
+                    "The Markdown file changed on disk after it was opened or last saved.",
+                    true,
+                )
+                .with_relative_path(relative_path)
+                .with_detail("expectedToken", expected_file_version.token)
+                .with_detail("currentToken", snapshot.version.token));
+            }
+            let file_version = snapshot.version.clone();
+            (snapshot, file_version)
+        } else {
+            let save = documents::save_document(
+                record,
+                SaveRequest {
+                    workspace_id: record.info.id.clone(),
+                    relative_path: relative_path.clone(),
+                    content: restored_content.clone(),
+                    expected_version: expected_file_version,
+                    reason: SaveReason::Manual,
+                },
+            )
+            .map_err(workspace_error_to_restore_error)?;
+            let snapshot = DocumentSnapshot {
+                workspace_id: record.info.id.clone(),
+                relative_path: relative_path.clone(),
+                content: restored_content,
+                version: save.version.clone(),
+                opened_at: now_iso(),
+            };
+            (snapshot, save.version)
+        };
+
+        let status = self.status(record)?;
+        let repository_state = status.repository_state.clone();
+
+        Ok(GitRestoreResult {
+            workspace_id: record.info.id.clone(),
+            relative_path,
+            restored_from,
+            snapshot,
+            file_version,
+            repository_state,
+            status,
+            restored_at: now_iso(),
+        })
+    }
+
     fn ensure_read_state(
         &self,
         state: GitRepositoryStateKind,
@@ -689,6 +817,131 @@ impl GitRepositoryService {
             "Git snapshot creation is blocked for the selected workspace in its current repository state.",
             true,
         ))
+    }
+
+    fn ensure_restore_state(
+        &self,
+        repository_state: &GitRepositoryState,
+    ) -> Result<(), GitOperationError> {
+        if matches!(
+            repository_state.state,
+            GitRepositoryStateKind::ValidRepository | GitRepositoryStateKind::NestedRepository
+        ) && repository_state.token.is_some()
+        {
+            return Ok(());
+        }
+
+        let code = if matches!(
+            repository_state.state,
+            GitRepositoryStateKind::ValidRepository | GitRepositoryStateKind::NestedRepository
+        ) {
+            GitOperationErrorCode::ExternalStateChanged
+        } else {
+            blocked_by_state(repository_state.state)
+        };
+
+        Err(GitOperationError::new(
+            code,
+            GitServiceOperation::Restore,
+            "Git restore is blocked for the selected workspace in its current repository state.",
+            true,
+        ))
+    }
+
+    fn resolve_restore_source_ref(
+        &self,
+        cwd: &Path,
+        value: &str,
+    ) -> Result<String, GitOperationError> {
+        let value = require_restore_ref(value)?;
+        let peeled = format!("{value}^{{commit}}");
+
+        self.run_git_result(
+            cwd,
+            [
+                OsString::from("rev-parse"),
+                OsString::from("--verify"),
+                OsString::from("--end-of-options"),
+                OsString::from(peeled),
+            ],
+            GitServiceOperation::Restore,
+        )
+        .map(|output| output.stdout.trim().to_owned())
+        .map_err(|error| {
+            if matches!(
+                error.code,
+                GitOperationErrorCode::InvalidRef | GitOperationErrorCode::UnknownGitError
+            ) {
+                restore_invalid_ref_error(
+                    "The requested Git revision could not be resolved to a commit.",
+                )
+            } else {
+                error
+            }
+        })
+    }
+
+    fn read_historical_markdown_blob(
+        &self,
+        cwd: &Path,
+        commit_oid: &str,
+        repo_path: &str,
+        relative_path: &str,
+    ) -> Result<String, GitOperationError> {
+        let object_spec = format!("{commit_oid}:{repo_path}");
+        let object_type = self
+            .run_git_result(
+                cwd,
+                [
+                    OsString::from("cat-file"),
+                    OsString::from("-t"),
+                    OsString::from(object_spec.clone()),
+                ],
+                GitServiceOperation::Restore,
+            )
+            .map_err(|error| historical_blob_error(error, relative_path))?
+            .stdout
+            .trim()
+            .to_owned();
+
+        if object_type != "blob" {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::FileNotInHistory,
+                GitServiceOperation::Restore,
+                "The requested historical path is not a file blob.",
+                true,
+            )
+            .with_relative_path(relative_path));
+        }
+
+        let output = self
+            .raw_git_output(
+                Some(cwd),
+                [
+                    OsString::from("cat-file"),
+                    OsString::from("blob"),
+                    OsString::from(object_spec),
+                ],
+            )
+            .map_err(|error| git_error_from_io(GitServiceOperation::Restore, &error))?;
+
+        if !output.status.success() {
+            return Err(historical_blob_error(
+                git_error_from_output(GitServiceOperation::Restore, &output),
+                relative_path,
+            ));
+        }
+
+        String::from_utf8(output.stdout).map_err(|error| {
+            GitOperationError::new(
+                GitOperationErrorCode::RestoreConflict,
+                GitServiceOperation::Restore,
+                "The historical Markdown file is not valid UTF-8 and cannot be restored safely.",
+                true,
+            )
+            .with_relative_path(relative_path)
+            .with_detail("source", error.to_string())
+        })
     }
 
     fn resolve_author_identity(
@@ -1307,6 +1560,41 @@ fn require_ref(value: Option<&str>, field_name: &'static str) -> Result<String, 
     Ok(value.to_owned())
 }
 
+fn require_restore_ref(value: &str) -> Result<String, GitOperationError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().any(char::is_control) {
+        return Err(restore_invalid_ref_error(
+            "Git restore requests must include a non-empty source revision.",
+        ));
+    }
+
+    Ok(value.to_owned())
+}
+
+fn validate_restore_path(
+    relative_path: &str,
+    case_sensitive: bool,
+) -> Result<WorkspaceRelativePath, GitOperationError> {
+    let relative_path =
+        validate_git_workspace_relative_path(relative_path, GitServiceOperation::Restore)?;
+    let file_name = Path::new(&relative_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+
+    if supported_markdown_extension(file_name, case_sensitive).is_none() {
+        return Err(GitOperationError::new(
+            GitOperationErrorCode::RestoreConflict,
+            GitServiceOperation::Restore,
+            "Only Markdown files ending in .md or .markdown can be restored safely.",
+            true,
+        )
+        .with_relative_path(relative_path));
+    }
+
+    Ok(relative_path)
+}
+
 fn invalid_ref_error(message: impl Into<String>) -> GitOperationError {
     GitOperationError::new(
         GitOperationErrorCode::InvalidRef,
@@ -1314,6 +1602,72 @@ fn invalid_ref_error(message: impl Into<String>) -> GitOperationError {
         message,
         true,
     )
+}
+
+fn restore_invalid_ref_error(message: impl Into<String>) -> GitOperationError {
+    GitOperationError::new(
+        GitOperationErrorCode::InvalidRef,
+        GitServiceOperation::Restore,
+        message,
+        true,
+    )
+}
+
+fn historical_blob_error(error: GitOperationError, relative_path: &str) -> GitOperationError {
+    if matches!(
+        error.code,
+        GitOperationErrorCode::InvalidRef | GitOperationErrorCode::UnknownGitError
+    ) {
+        return GitOperationError::new(
+            GitOperationErrorCode::FileNotInHistory,
+            GitServiceOperation::Restore,
+            "The requested file was not found at the selected Git revision.",
+            true,
+        )
+        .with_relative_path(relative_path)
+        .with_detail("source", error.message);
+    }
+
+    error
+}
+
+fn workspace_error_to_restore_error(error: WorkspaceError) -> GitOperationError {
+    let code = match error.code {
+        WorkspaceErrorCode::VersionConflict
+        | WorkspaceErrorCode::FileNotFound
+        | WorkspaceErrorCode::InvalidUtf8
+        | WorkspaceErrorCode::UnsupportedFileType
+        | WorkspaceErrorCode::FileAlreadyExists => GitOperationErrorCode::RestoreConflict,
+        WorkspaceErrorCode::WorkspaceUnwritable | WorkspaceErrorCode::PermissionDenied => {
+            GitOperationErrorCode::PermissionDenied
+        }
+        WorkspaceErrorCode::InvalidRelativePath | WorkspaceErrorCode::PathOutsideWorkspace => {
+            GitOperationErrorCode::PermissionDenied
+        }
+        WorkspaceErrorCode::WorkspaceMissing
+        | WorkspaceErrorCode::WorkspaceNotSelected
+        | WorkspaceErrorCode::WorkspaceNotDirectory
+        | WorkspaceErrorCode::InvalidWorkspacePath => GitOperationErrorCode::NotRepository,
+        _ => GitOperationErrorCode::UnknownGitError,
+    };
+
+    let mut git_error = GitOperationError::new(
+        code,
+        GitServiceOperation::Restore,
+        error.message,
+        error.recoverable,
+    );
+
+    if let Some(relative_path) = error.relative_path {
+        git_error = git_error.with_relative_path(relative_path);
+    }
+    if let Some(details) = error.details {
+        for (key, value) in details {
+            git_error = git_error.with_detail(key, value);
+        }
+    }
+
+    git_error
 }
 
 fn truncate_utf8(value: &str, max_bytes: usize) -> (String, usize) {
@@ -2505,6 +2859,24 @@ mod tests {
         }
     }
 
+    fn restore_request(
+        record: &WorkspaceRecord,
+        status: &GitStatusSummary,
+        relative_path: &str,
+        source_ref: &str,
+        expected_file_version: crate::models::FileVersion,
+    ) -> GitRestoreRequest {
+        GitRestoreRequest {
+            workspace_id: record.info.id.clone(),
+            relative_path: relative_path.to_owned(),
+            source_ref: source_ref.to_owned(),
+            expected_repo_token: status.token.clone().unwrap(),
+            expected_file_version,
+            editor_has_unsaved_changes: false,
+            dry_run: false,
+        }
+    }
+
     fn diff_truncation_for_tests() -> GitDiffTruncation {
         GitDiffTruncation {
             is_truncated: false,
@@ -2662,6 +3034,215 @@ Binary files old/assets/blob.bin and new/assets/blob.bin differ
             .unwrap_err()
             .code,
             GitOperationErrorCode::IdentityMissing
+        );
+    }
+
+    #[test]
+    fn restores_historical_markdown_as_pending_worktree_change_without_moving_head() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Old\n").unwrap();
+        commit_all(temp.path(), "Old idea");
+        let old_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Current idea");
+        let head_before = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        let branch_before = git_stdout(temp.path(), &["branch", "--show-current"]);
+        let record = record_for(temp.path());
+        let snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        let status = service().status(&record).unwrap();
+
+        let result = service()
+            .restore_file(
+                &record,
+                restore_request(&record, &status, "idea.md", &old_commit, snapshot.version),
+            )
+            .unwrap();
+
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# Old\n"
+        );
+        assert_eq!(result.snapshot.content, "# Old\n");
+        assert_eq!(result.restored_from, old_commit);
+        assert_ne!(result.file_version.token, status.token.unwrap().token);
+        assert_eq!(git_stdout(temp.path(), &["rev-parse", "HEAD"]), head_before);
+        assert_eq!(
+            git_stdout(temp.path(), &["branch", "--show-current"]),
+            branch_before
+        );
+        assert!(result.status.has_changes);
+        assert_eq!(result.status.entries[0].relative_path, "idea.md");
+        assert_eq!(
+            result.status.entries[0].unstaged,
+            GitStatusChangeKind::Modified
+        );
+    }
+
+    #[test]
+    fn blocks_restore_when_repository_token_is_stale_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Old\n").unwrap();
+        commit_all(temp.path(), "Old idea");
+        let old_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Current idea");
+        let record = record_for(temp.path());
+        let snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        let status = service().status(&record).unwrap();
+        fs::write(temp.path().join("later.md"), "# Later\n").unwrap();
+
+        let error = service()
+            .restore_file(
+                &record,
+                restore_request(&record, &status, "idea.md", &old_commit, snapshot.version),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::ExternalStateChanged);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# Current\n"
+        );
+    }
+
+    #[test]
+    fn blocks_restore_when_current_file_version_is_stale_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Old\n").unwrap();
+        commit_all(temp.path(), "Old idea");
+        let old_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Current idea");
+        let record = record_for(temp.path());
+        let stale_snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        fs::write(temp.path().join("idea.md"), "# External\n").unwrap();
+        let current_status = service().status(&record).unwrap();
+
+        let error = service()
+            .restore_file(
+                &record,
+                restore_request(
+                    &record,
+                    &current_status,
+                    "idea.md",
+                    &old_commit,
+                    stale_snapshot.version,
+                ),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::RestoreConflict);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# External\n"
+        );
+    }
+
+    #[test]
+    fn blocks_restore_when_editor_reports_unsaved_changes_without_writing() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Old\n").unwrap();
+        commit_all(temp.path(), "Old idea");
+        let old_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Current idea");
+        let record = record_for(temp.path());
+        let snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        let status = service().status(&record).unwrap();
+        let mut request =
+            restore_request(&record, &status, "idea.md", &old_commit, snapshot.version);
+        request.editor_has_unsaved_changes = true;
+
+        let error = service().restore_file(&record, request).unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::RestoreConflict);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# Current\n"
+        );
+    }
+
+    #[test]
+    fn maps_invalid_ref_and_missing_historical_blob_to_typed_restore_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("readme.md"), "# Readme\n").unwrap();
+        commit_all(temp.path(), "Readme only");
+        let missing_blob_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Add idea");
+        let record = record_for(temp.path());
+        let snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        let status = service().status(&record).unwrap();
+
+        let invalid_ref = service()
+            .restore_file(
+                &record,
+                restore_request(
+                    &record,
+                    &status,
+                    "idea.md",
+                    "missing-ref",
+                    snapshot.version.clone(),
+                ),
+            )
+            .unwrap_err();
+        assert_eq!(invalid_ref.code, GitOperationErrorCode::InvalidRef);
+
+        let missing_blob = service()
+            .restore_file(
+                &record,
+                restore_request(
+                    &record,
+                    &status,
+                    "idea.md",
+                    &missing_blob_commit,
+                    snapshot.version,
+                ),
+            )
+            .unwrap_err();
+        assert_eq!(missing_blob.code, GitOperationErrorCode::FileNotInHistory);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# Current\n"
+        );
+    }
+
+    #[test]
+    fn blocks_restore_while_merge_conflict_marker_is_present() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Old\n").unwrap();
+        commit_all(temp.path(), "Old idea");
+        let old_commit = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        fs::write(temp.path().join("idea.md"), "# Current\n").unwrap();
+        commit_all(temp.path(), "Current idea");
+        let record = record_for(temp.path());
+        let snapshot = crate::documents::open_document(&record, "idea.md").unwrap();
+        fs::write(temp.path().join(".git").join("MERGE_HEAD"), &old_commit).unwrap();
+        let status = service().status(&record).unwrap();
+
+        let error = service()
+            .restore_file(
+                &record,
+                restore_request(&record, &status, "idea.md", &old_commit, snapshot.version),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::MergeConflict);
+        assert_eq!(
+            fs::read_to_string(temp.path().join("idea.md")).unwrap(),
+            "# Current\n"
         );
     }
 

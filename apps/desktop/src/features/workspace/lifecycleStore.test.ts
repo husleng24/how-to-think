@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
+import type { GitStatusSummary } from '../git-service';
 import type {
   FileVersion,
   MarkdownMindMapDocument,
@@ -131,6 +132,36 @@ describe('workspace lifecycle store', () => {
     expect(state.saveStatus.kind).toBe('missing');
   });
 
+  it('refreshes the active Markdown buffer and editor document after a Git restore', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    state = workspaceLifecycleReducer(state, {
+      type: 'document-opened',
+      payload: openedPayload('plan.md'),
+    });
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'document-restored',
+      payload: openedPayload('plan.md', {
+        content: '# Restored\n',
+        title: 'Restored',
+        token: 'restored-token',
+        openedAt: '2026-05-10T00:02:00Z',
+      }),
+      gitStatus: gitStatusSummary('plan.md'),
+    });
+
+    expect(state.active?.snapshot.content).toBe('# Restored\n');
+    expect(state.active?.snapshot.version.token).toBe('restored-token');
+    expect(state.active?.markdownDocument.title).toBe('Restored');
+    expect(state.active?.editorDocument.title).toBe('Restored');
+    expect(state.active?.contentRevision).toBe(state.active?.savedContentRevision);
+    expect(state.saveStatus.message).toBe('Restored from Git history');
+    expect(state.gitStatus?.entries[0].relativePath).toBe('plan.md');
+  });
+
   it('creates Save, Discard, Cancel prompts for dirty switches and disables Save while saving', () => {
     let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
       type: 'workspace-loaded',
@@ -181,17 +212,23 @@ function workspaceSession(files: WorkspaceFile[]): WorkspaceSession {
   };
 }
 
-function openedPayload(relativePath: string): OpenedDocumentPayload {
+function openedPayload(
+  relativePath: string,
+  input: { content?: string; title?: string; token?: string; openedAt?: string } = {},
+): OpenedDocumentPayload {
+  const content = input.content ?? '# Plan\n';
+  const title = input.title ?? 'Plan';
+
   return {
     result: {
       snapshot: {
         workspaceId: 'workspace-1',
         relativePath,
-        content: '# Plan\n',
-        version: fileVersion('open-token'),
-        openedAt: '2026-05-10T00:00:00Z',
+        content,
+        version: fileVersion(input.token ?? 'open-token'),
+        openedAt: input.openedAt ?? '2026-05-10T00:00:00Z',
       },
-      document: markdownDocument(relativePath),
+      document: markdownDocument(relativePath, title),
       diagnostics: [],
       files: [workspaceFile(relativePath)],
       linkIndex: {
@@ -200,7 +237,7 @@ function openedPayload(relativePath: string): OpenedDocumentPayload {
         diagnostics: [],
       },
     },
-    editorDocument: editorDocument(relativePath, 1),
+    editorDocument: editorDocument(relativePath, 1, title),
     contentRevision: 1,
   };
 }
@@ -259,10 +296,71 @@ function savedResult(relativePath: string): SaveMarkdownMindMapResult & {
   };
 }
 
-function editorDocument(relativePath: string, version: number): EditorMindMapDocument {
+function gitStatusSummary(relativePath: string): GitStatusSummary {
+  return {
+    workspaceId: 'workspace-1',
+    repositoryState: {
+      workspaceId: 'workspace-1',
+      state: 'valid_repository',
+      backend: {
+        kind: 'system_git',
+        version: 'git version 2.52.0',
+      },
+      selectedRootDisplayPath: 'C:\\Notes',
+      repositoryRootDisplayPath: 'C:\\Notes',
+      branchName: 'main',
+      headOid: 'abc123',
+      token: {
+        token: 'repo-token',
+        headOid: 'abc123',
+        indexVersion: 3,
+        indexChecksum: 'index',
+        worktreeStatusGeneration: 'dirty',
+        capturedAt: '2026-05-10T00:02:00Z',
+      },
+      warnings: [],
+      checkedAt: '2026-05-10T00:02:00Z',
+    },
+    token: {
+      token: 'repo-token',
+      headOid: 'abc123',
+      indexVersion: 3,
+      indexChecksum: 'index',
+      worktreeStatusGeneration: 'dirty',
+      capturedAt: '2026-05-10T00:02:00Z',
+    },
+    entries: [
+      {
+        relativePath,
+        staged: 'unmodified',
+        unstaged: 'modified',
+        conflicted: false,
+      },
+    ],
+    counts: {
+      added: 0,
+      modified: 1,
+      deleted: 0,
+      renamed: 0,
+      untracked: 0,
+      ignored: 0,
+    },
+    hasChanges: true,
+    hasConflicts: false,
+    changedFileCount: 1,
+    untrackedFileCount: 0,
+    refreshedAt: '2026-05-10T00:02:00Z',
+  };
+}
+
+function editorDocument(
+  relativePath: string,
+  version: number,
+  title = 'Plan',
+): EditorMindMapDocument {
   return {
     id: relativePath,
-    title: 'Plan',
+    title,
     sourcePath: relativePath,
     rootNodeId: 'root',
     version,
@@ -271,7 +369,7 @@ function editorDocument(relativePath: string, version: number): EditorMindMapDoc
     nodes: {
       root: {
         id: 'root',
-        text: 'Plan',
+        text: title,
         parentId: null,
         childIds: [],
         collapsed: false,
@@ -282,17 +380,17 @@ function editorDocument(relativePath: string, version: number): EditorMindMapDoc
   };
 }
 
-function markdownDocument(relativePath: string): MarkdownMindMapDocument {
+function markdownDocument(relativePath: string, title = 'Plan'): MarkdownMindMapDocument {
   return {
     schemaVersion: 'mindmap-document.v1',
     sourcePath: relativePath,
-    title: 'Plan',
+    title,
     parseMode: 'auto',
     rootNodeId: 'root',
     nodes: {
       root: {
         id: 'root',
-        title: 'Plan',
+        title,
         rawText: '',
         nodeKind: 'virtual_root',
         children: [],

@@ -157,6 +157,7 @@ describe('Git service contract', () => {
       sourceRef: 'HEAD~1',
       expectedRepoToken: sampleToken,
       expectedFileVersion: sampleFileVersion,
+      editorHasUnsavedChanges: false,
     };
 
     expect(validateGitSnapshotRequestContract(snapshot)).toEqual([]);
@@ -177,6 +178,12 @@ describe('Git service contract', () => {
       'source_ref_required',
       'unsafe_scope_path',
     ]);
+    expect(
+      validateGitRestoreRequestContract({
+        ...restore,
+        editorHasUnsavedChanges: true,
+      }).map((issue) => issue.code),
+    ).toEqual(['unsaved_editor_changes']);
     expect(gitMethodRequiresExpectedRepoToken('snapshot')).toBe(true);
     expect(gitMethodRequiresExpectedRepoToken('restore')).toBe(true);
   });
