@@ -12,7 +12,15 @@ use crate::links::index::WorkspaceLinkIndex;
 use crate::links::model::{LinkKind, LinkReference, ResolveLinksResponse};
 use crate::links::resolver;
 use crate::markdown_lifecycle::{
-    self, ParseMarkdownPreviewRequest, SerializeMindMapRequest, SerializeMindMapResult,
+    self, OpenMarkdownMindMapRequest, ParseMarkdownPreviewRequest, SaveMarkdownMindMapRequest,
+    SaveMarkdownMindMapStatus, SerializeMindMapRequest, SerializeMindMapResult,
+    SerializeMindMapStatus,
+};
+use crate::mindmap_cli::{
+    self, MindMapAddNodeRequest, MindMapCliError, MindMapCliErrorCode, MindMapDeleteBranchRequest,
+    MindMapMoveBranchRequest, MindMapMutationImpact, MindMapMutationStatus, MindMapNodeSelector,
+    MindMapReorderSiblingsRequest, MindMapSiblingPosition, MindMapTemplateRequest,
+    MindMapUpdateNodeRequest,
 };
 use crate::models::Platform;
 use crate::models::{
@@ -309,6 +317,29 @@ pub struct MarkdownLinksResolveCliRequest {
     pub link: Option<LinkReference>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MindMapCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub relative_path: WorkspaceRelativePath,
+    pub expected_version: Option<FileVersion>,
+    pub confirmation_token: Option<String>,
+    pub non_interactive: bool,
+    pub parse_mode: ParseMode,
+    pub preservation_policy: SerializePreservationPolicy,
+    pub line_ending: MarkdownLineEnding,
+    pub node_id: Option<String>,
+    pub node_path: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_path: Option<String>,
+    pub text: Option<String>,
+    pub title: Option<String>,
+    pub root_text: Option<String>,
+    pub index: Option<usize>,
+    pub position: MindMapSiblingPosition,
+    pub child_ids: Vec<String>,
+    pub template: Option<String>,
+}
+
 impl CommandServicePaths {
     pub fn resolve(
         app_data_dir: Option<PathBuf>,
@@ -410,6 +441,34 @@ impl CommandService {
                     description: "Resolve Markdown and Obsidian links inside a workspace.",
                 },
                 HelpCommand {
+                    name: "mindmap.read",
+                    description: "Read a Markdown mind map and return queryable tree structure.",
+                },
+                HelpCommand {
+                    name: "mindmap.create",
+                    description: "Create a Markdown mind map from a safe template.",
+                },
+                HelpCommand {
+                    name: "mindmap.node.add",
+                    description: "Add a child or sibling node and save through lifecycle guards.",
+                },
+                HelpCommand {
+                    name: "mindmap.node.update",
+                    description: "Rename a mind map node and save through lifecycle guards.",
+                },
+                HelpCommand {
+                    name: "mindmap.branch.move",
+                    description: "Move a subtree after cycle checks and confirmation.",
+                },
+                HelpCommand {
+                    name: "mindmap.branch.delete",
+                    description: "Delete a subtree after explicit confirmation.",
+                },
+                HelpCommand {
+                    name: "mindmap.siblings.reorder",
+                    description: "Reorder a node's existing children.",
+                },
+                HelpCommand {
                     name: "ui.open",
                     description:
                         "Return a desktop UI handoff for an app, workspace, or file target.",
@@ -471,6 +530,30 @@ impl CommandService {
                 HelpFlag {
                     name: "--link-kind <standard|wiki|image>",
                     description: "Select the link kind for --link-target.",
+                },
+                HelpFlag {
+                    name: "--node-id <id>",
+                    description: "Select a mind map node by id.",
+                },
+                HelpFlag {
+                    name: "--node-path <path>",
+                    description: "Select a mind map node by slash-separated titles.",
+                },
+                HelpFlag {
+                    name: "--parent-id <id>",
+                    description: "Select a parent node by id.",
+                },
+                HelpFlag {
+                    name: "--text <text>",
+                    description: "Provide node text for add or update.",
+                },
+                HelpFlag {
+                    name: "--index <n>",
+                    description: "Provide an insertion index for mind map mutations.",
+                },
+                HelpFlag {
+                    name: "--child-ids <a,b>",
+                    description: "Provide a comma-separated child order for reorder.",
                 },
                 HelpFlag {
                     name: "--reason <text>",
@@ -1060,6 +1143,218 @@ impl CommandService {
         CliResultEnvelope::success(operation_id, response)
     }
 
+    pub fn read_mindmap_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        let operation_id = "mindmap.read";
+        let (record, opened) = match self.open_mindmap_for_cli(
+            operation_id,
+            request.workspace_path,
+            request.relative_path,
+            request.parse_mode,
+        ) {
+            Ok(value) => value,
+            Err(envelope) => return envelope,
+        };
+        let Some(document) = opened.document else {
+            return CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::ValidationError,
+                "Markdown could not be parsed into a mind map document.",
+            );
+        };
+
+        match mindmap_cli::read_mindmap(
+            record.info,
+            opened.snapshot.relative_path,
+            opened.snapshot.version,
+            document,
+            node_selector(request.node_id, request.node_path),
+        ) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => mindmap_error_envelope(operation_id, error),
+        }
+    }
+
+    pub fn create_mindmap_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        let operation_id = "mindmap.create";
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::CreateFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let mut document = match mindmap_cli::create_template_document(MindMapTemplateRequest {
+            relative_path: request.relative_path.clone(),
+            title: request.title,
+            root_text: request.root_text,
+            template: request.template,
+        }) {
+            Ok(document) => document,
+            Err(error) => return mindmap_error_envelope(operation_id, error),
+        };
+        let serialized = markdown_lifecycle::serialize_mind_map(SerializeMindMapRequest {
+            document: document.clone(),
+            target_path: Some(request.relative_path.clone()),
+            save_mode: MarkdownSerializeMode::CanonicalHeadings,
+            preservation_policy: request.preservation_policy,
+            line_ending: request.line_ending,
+        });
+        if serialized.status != SerializeMindMapStatus::Serialized {
+            return CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::ValidationError,
+                "Template mind map could not be serialized safely.",
+            );
+        }
+
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: CliGuardedOperation::Mutating,
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: vec![request.relative_path.clone()],
+            expected_versions: Vec::new(),
+            confirmation_token: request.confirmation_token,
+            non_interactive: request.non_interactive,
+            risks: Vec::new(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        let markdown = serialized.markdown.unwrap_or_default();
+        let snapshot =
+            match documents::create_document(&record, &request.relative_path, Some(markdown)) {
+                Ok(snapshot) => snapshot,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            };
+        let parsed = markdown_lifecycle::parse_markdown_preview(ParseMarkdownPreviewRequest {
+            markdown: snapshot.content.clone(),
+            source_path: Some(snapshot.relative_path.clone()),
+            parse_mode: request.parse_mode,
+        });
+        if let Some(parsed_document) = parsed.document {
+            document = parsed_document;
+        }
+        let changed_node_ids = match mindmap_cli::summarize_nodes(&document) {
+            Ok(nodes) => nodes
+                .into_iter()
+                .filter(|node| node.id != document.root_node_id)
+                .map(|node| node.id)
+                .collect(),
+            Err(error) => return mindmap_error_envelope(operation_id, error),
+        };
+        let impact = MindMapMutationImpact {
+            command: operation_id.to_owned(),
+            changed: true,
+            changed_node_ids,
+            added_node_id: None,
+            deleted_node_ids: Vec::new(),
+            moved_node_id: None,
+            affected_subtree_node_count: document.nodes.len().saturating_sub(1),
+            requires_destructive_confirmation: false,
+            risks: Vec::new(),
+        };
+
+        match mindmap_cli::mutation_result(
+            MindMapMutationStatus::Created,
+            snapshot.workspace_id,
+            snapshot.relative_path.clone(),
+            snapshot.version,
+            None,
+            &document,
+            impact,
+            parsed.diagnostics,
+            Vec::new(),
+        ) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => mindmap_error_envelope(operation_id, error),
+        }
+    }
+
+    pub fn add_mindmap_node_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        self.mutate_mindmap_cli("mindmap.node.add", request, |document, request| {
+            mindmap_cli::add_node(
+                document,
+                MindMapAddNodeRequest {
+                    parent: node_selector(request.parent_id.clone(), request.parent_path.clone()),
+                    sibling: node_selector(request.node_id.clone(), request.node_path.clone()),
+                    text: request.text.clone(),
+                    index: request.index,
+                    position: request.position,
+                },
+            )
+        })
+    }
+
+    pub fn update_mindmap_node_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        self.mutate_mindmap_cli("mindmap.node.update", request, |document, request| {
+            let Some(text) = request.text.clone() else {
+                return Err(MindMapCliError {
+                    code: MindMapCliErrorCode::InvalidArguments,
+                    message: "Flag `--text` is required for mindmap.node.update.".to_owned(),
+                });
+            };
+            mindmap_cli::update_node(
+                document,
+                MindMapUpdateNodeRequest {
+                    node: node_selector(request.node_id.clone(), request.node_path.clone()),
+                    text,
+                },
+            )
+        })
+    }
+
+    pub fn move_mindmap_branch_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        self.mutate_mindmap_cli("mindmap.branch.move", request, |document, request| {
+            mindmap_cli::move_branch(
+                document,
+                MindMapMoveBranchRequest {
+                    node: node_selector(request.node_id.clone(), request.node_path.clone()),
+                    new_parent: node_selector(
+                        request.parent_id.clone(),
+                        request.parent_path.clone(),
+                    ),
+                    index: request.index,
+                },
+            )
+        })
+    }
+
+    pub fn delete_mindmap_branch_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        self.mutate_mindmap_cli("mindmap.branch.delete", request, |document, request| {
+            mindmap_cli::delete_branch(
+                document,
+                MindMapDeleteBranchRequest {
+                    node: node_selector(request.node_id.clone(), request.node_path.clone()),
+                },
+            )
+        })
+    }
+
+    pub fn reorder_mindmap_siblings_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {
+        self.mutate_mindmap_cli("mindmap.siblings.reorder", request, |document, request| {
+            mindmap_cli::reorder_siblings(
+                document,
+                MindMapReorderSiblingsRequest {
+                    parent: node_selector(request.parent_id.clone(), request.parent_path.clone()),
+                    child_ids: request.child_ids.clone(),
+                },
+            )
+        })
+    }
+
+    pub fn unsupported_mindmap_cli_action(
+        &self,
+        operation_id: &'static str,
+        action: &'static str,
+    ) -> CliResultEnvelope {
+        mindmap_error_envelope(
+            operation_id,
+            mindmap_cli::unsupported_persisted_state_error(action),
+        )
+    }
+
     pub fn validate_workspace_relative_path(
         &self,
         relative_path: &str,
@@ -1122,6 +1417,209 @@ impl CommandService {
             }) {
             Ok(result) => CliResultEnvelope::success(operation_id, result),
             Err(error) => CliResultEnvelope::from_workspace_error(operation_id, error),
+        }
+    }
+
+    fn open_mindmap_for_cli(
+        &self,
+        operation_id: &'static str,
+        workspace_path: Option<PathBuf>,
+        relative_path: WorkspaceRelativePath,
+        parse_mode: ParseMode,
+    ) -> Result<
+        (
+            WorkspaceRecord,
+            markdown_lifecycle::OpenMarkdownMindMapResult,
+        ),
+        CliResultEnvelope,
+    > {
+        let (record, _) = self
+            .record_for_cli_workspace(workspace_path, WorkspaceOperation::OpenFile)
+            .map_err(|error| CliResultEnvelope::from_workspace_error(operation_id, error))?;
+        let opened = markdown_lifecycle::open_markdown_mind_map(
+            &record,
+            OpenMarkdownMindMapRequest {
+                workspace_id: record.info.id.clone(),
+                relative_path,
+                parse_mode,
+            },
+        )
+        .map_err(|error| CliResultEnvelope::from_workspace_error(operation_id, error))?;
+        Ok((record, opened))
+    }
+
+    fn mutate_mindmap_cli<F>(
+        &self,
+        operation_id: &'static str,
+        request: MindMapCliRequest,
+        mutate: F,
+    ) -> CliResultEnvelope
+    where
+        F: FnOnce(
+            &mut MindMapDocument,
+            &MindMapCliRequest,
+        ) -> Result<MindMapMutationImpact, MindMapCliError>,
+    {
+        let expected_version = match request.expected_version.clone() {
+            Some(version) => version,
+            None => {
+                return CliResultEnvelope::error(
+                    operation_id,
+                    CliErrorCode::InvalidArguments,
+                    "Flag `--expected-version` is required for mind map mutations.",
+                )
+            }
+        };
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path.clone(), WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let opened = match markdown_lifecycle::open_markdown_mind_map(
+            &record,
+            OpenMarkdownMindMapRequest {
+                workspace_id: record.info.id.clone(),
+                relative_path: request.relative_path.clone(),
+                parse_mode: request.parse_mode,
+            },
+        ) {
+            Ok(opened) => opened,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let Some(mut document) = opened.document else {
+            return CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::ValidationError,
+                "Markdown could not be parsed into a mind map document.",
+            );
+        };
+        let impact = match mutate(&mut document, &request) {
+            Ok(impact) => impact,
+            Err(error) => return mindmap_error_envelope(operation_id, error),
+        };
+
+        if !impact.changed {
+            return match mindmap_cli::mutation_result(
+                MindMapMutationStatus::Unchanged,
+                record.info.id,
+                opened.snapshot.relative_path,
+                opened.snapshot.version,
+                None,
+                &document,
+                impact,
+                opened.diagnostics,
+                Vec::new(),
+            ) {
+                Ok(result) => CliResultEnvelope::success(operation_id, result),
+                Err(error) => mindmap_error_envelope(operation_id, error),
+            };
+        }
+
+        let preview = markdown_lifecycle::serialize_mind_map(SerializeMindMapRequest {
+            document: document.clone(),
+            target_path: Some(request.relative_path.clone()),
+            save_mode: MarkdownSerializeMode::CanonicalHeadings,
+            preservation_policy: request.preservation_policy,
+            line_ending: request.line_ending,
+        });
+        let lossy_confirmation_required = match preview.status {
+            SerializeMindMapStatus::Serialized => false,
+            SerializeMindMapStatus::LossySaveConfirmationRequired => true,
+            SerializeMindMapStatus::LossySaveBlocked
+            | SerializeMindMapStatus::SerializationError => {
+                return CliResultEnvelope::error(
+                    operation_id,
+                    CliErrorCode::ValidationError,
+                    "Mind map mutation could not be serialized without violating Markdown compatibility policy.",
+                );
+            }
+        };
+        let mut risks = impact.risks.clone();
+        if lossy_confirmation_required {
+            risks.push(
+                "Markdown compatibility diagnostics require confirmation before saving preserved raw content."
+                    .to_owned(),
+            );
+        }
+        let guarded_operation = if impact.requires_destructive_confirmation {
+            CliGuardedOperation::DestructiveMindmap
+        } else if lossy_confirmation_required {
+            CliGuardedOperation::LossyMarkdownWrite
+        } else {
+            CliGuardedOperation::Mutating
+        };
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: guarded_operation,
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: vec![request.relative_path.clone()],
+            expected_versions: vec![CliExpectedVersion {
+                relative_path: request.relative_path.clone(),
+                version: expected_version.clone(),
+            }],
+            confirmation_token: request.confirmation_token.clone(),
+            non_interactive: request.non_interactive,
+            risks,
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        let saved = match markdown_lifecycle::save_markdown_mind_map(
+            &record,
+            SaveMarkdownMindMapRequest {
+                workspace_id: record.info.id.clone(),
+                relative_path: request.relative_path.clone(),
+                expected_version,
+                document: document.clone(),
+                reason: SaveReason::Manual,
+                save_mode: MarkdownSerializeMode::CanonicalHeadings,
+                preservation_policy: request.preservation_policy,
+                line_ending: request.line_ending,
+                confirm_lossy_save: lossy_confirmation_required,
+            },
+        ) {
+            Ok(saved) => saved,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        if saved.status != SaveMarkdownMindMapStatus::Saved {
+            return CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::ValidationError,
+                "Mind map mutation was not saved because serialization did not complete.",
+            );
+        }
+        let Some(save) = saved.save.clone() else {
+            return CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::InternalError,
+                "Mind map save succeeded without returning file version metadata.",
+            );
+        };
+        let reparsed = markdown_lifecycle::parse_markdown_preview(ParseMarkdownPreviewRequest {
+            markdown: saved.markdown.clone().unwrap_or_default(),
+            source_path: Some(save.relative_path.clone()),
+            parse_mode: request.parse_mode,
+        });
+        let saved_document = reparsed.document.unwrap_or(document);
+        let status = MindMapMutationStatus::Saved;
+
+        match mindmap_cli::mutation_result(
+            status,
+            record.info.id,
+            save.relative_path.clone(),
+            save.version.clone(),
+            Some(save),
+            &saved_document,
+            impact,
+            saved.diagnostics,
+            Vec::new(),
+        ) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => mindmap_error_envelope(operation_id, error),
         }
     }
 
@@ -1448,6 +1946,36 @@ fn links_from_markdown_snapshot(snapshot: &DocumentSnapshot) -> Vec<LinkReferenc
             alias: link.alias,
         })
         .collect()
+}
+
+fn node_selector(node_id: Option<String>, node_path: Option<String>) -> MindMapNodeSelector {
+    MindMapNodeSelector::new(node_id, node_path)
+}
+
+fn mindmap_error_envelope(
+    operation_id: impl Into<String>,
+    error: MindMapCliError,
+) -> CliResultEnvelope {
+    CliResultEnvelope::error(
+        operation_id,
+        cli_error_code_for_mindmap_error(error.code),
+        error.message,
+    )
+}
+
+fn cli_error_code_for_mindmap_error(code: MindMapCliErrorCode) -> CliErrorCode {
+    match code {
+        MindMapCliErrorCode::InvalidArguments => CliErrorCode::InvalidArguments,
+        MindMapCliErrorCode::UnsupportedOperation => CliErrorCode::UnsupportedOperation,
+        MindMapCliErrorCode::NodeNotFound
+        | MindMapCliErrorCode::AmbiguousNodePath
+        | MindMapCliErrorCode::RootOperationForbidden
+        | MindMapCliErrorCode::DuplicateNodeId
+        | MindMapCliErrorCode::InvalidIndex
+        | MindMapCliErrorCode::InvalidSiblingOrder
+        | MindMapCliErrorCode::CannotMoveIntoDescendant
+        | MindMapCliErrorCode::ValidationError => CliErrorCode::ValidationError,
+    }
 }
 
 pub fn cli_error_code_for_workspace_error(code: WorkspaceErrorCode) -> CliErrorCode {

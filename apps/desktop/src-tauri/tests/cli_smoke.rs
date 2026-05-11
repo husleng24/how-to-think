@@ -1,4 +1,4 @@
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::fs;
 use std::process::{Command, Output};
 
@@ -21,6 +21,18 @@ fn json_output(args: &[&str]) -> (Output, Value) {
     let output = cli_output(args);
     let envelope: Value = serde_json::from_str(&stdout(&output)).unwrap();
     (output, envelope)
+}
+
+fn node_id_by_path(envelope: &Value, path: &[&str]) -> String {
+    let expected = json!(path);
+    envelope["data"]["nodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|node| node["path"] == expected)
+        .and_then(|node| node["id"].as_str())
+        .expect("node path should exist in mindmap output")
+        .to_owned()
 }
 
 #[test]
@@ -379,6 +391,178 @@ fn markdown_parse_and_link_resolution_json_report_diagnostics() {
         ambiguous["data"]["links"][0]["diagnostics"][0]["code"],
         "ambiguous_target"
     );
+}
+
+#[test]
+fn mindmap_cli_reads_mutates_confirms_and_serializes_markdown() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("plan.md"), "# Plan\n\n## Alpha\n\n## Beta\n").unwrap();
+
+    let (_, created) = json_output(&[
+        "--json",
+        "mindmap.create",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "new-map.md",
+        "--title",
+        "Roadmap",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(created["ok"], true);
+    assert_eq!(
+        fs::read_to_string(workspace.join("new-map.md")).unwrap(),
+        "# Roadmap\n"
+    );
+
+    let (_, read) = json_output(&[
+        "--json",
+        "mindmap.read",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(read["ok"], true);
+    assert_eq!(read["data"]["summary"]["contentNodeCount"], 3);
+    let alpha_id = node_id_by_path(&read, &["Plan", "Alpha"]);
+    let version = serde_json::to_string(&read["data"]["version"]).unwrap();
+
+    let (_, added) = json_output(&[
+        "--json",
+        "mindmap.node.add",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--parent-id",
+        &alpha_id,
+        "--text",
+        "Detail",
+        "--expected-version",
+        &version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(added["ok"], true);
+    assert!(fs::read_to_string(workspace.join("plan.md"))
+        .unwrap()
+        .contains("### Detail"));
+    let added_version = serde_json::to_string(&added["data"]["version"]).unwrap();
+    let detail_id = node_id_by_path(&added, &["Plan", "Alpha", "Detail"]);
+    let plan_id = node_id_by_path(&added, &["Plan"]);
+
+    let (cycle_output, cycle_error) = json_output(&[
+        "--json",
+        "mindmap.branch.move",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--node-id",
+        &plan_id,
+        "--parent-id",
+        &alpha_id,
+        "--expected-version",
+        &added_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(cycle_output.status.code(), Some(10));
+    assert_eq!(cycle_error["error"]["code"], "validation_error");
+    assert!(fs::read_to_string(workspace.join("plan.md"))
+        .unwrap()
+        .contains("### Detail"));
+
+    let (_, renamed) = json_output(&[
+        "--json",
+        "mindmap.node.update",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--node-id",
+        &detail_id,
+        "--text",
+        "Renamed detail",
+        "--expected-version",
+        &added_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(renamed["ok"], true);
+    assert!(fs::read_to_string(workspace.join("plan.md"))
+        .unwrap()
+        .contains("### Renamed detail"));
+    let renamed_version = serde_json::to_string(&renamed["data"]["version"]).unwrap();
+    let renamed_detail_id = node_id_by_path(&renamed, &["Plan", "Alpha", "Renamed detail"]);
+
+    let (delete_probe_output, delete_probe) = json_output(&[
+        "--json",
+        "mindmap.branch.delete",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--node-id",
+        &renamed_detail_id,
+        "--expected-version",
+        &renamed_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(delete_probe_output.status.code(), Some(30));
+    assert_eq!(delete_probe["error"]["code"], "confirmation_required");
+    assert_eq!(
+        delete_probe["needs_confirmation"]["kind"],
+        "destructive_mindmap"
+    );
+    let delete_token = delete_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, deleted) = json_output(&[
+        "--json",
+        "mindmap.branch.delete",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--node-id",
+        &renamed_detail_id,
+        "--expected-version",
+        &renamed_version,
+        "--confirm-token",
+        delete_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(deleted["ok"], true);
+    let final_markdown = fs::read_to_string(workspace.join("plan.md")).unwrap();
+    assert!(!final_markdown.contains("Renamed detail"));
+    assert!(final_markdown.contains("## Alpha"));
+    assert!(final_markdown.contains("## Beta"));
 }
 
 #[test]

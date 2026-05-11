@@ -13,6 +13,7 @@ pub mod git_contracts;
 pub mod git_service;
 pub mod links;
 pub mod markdown_lifecycle;
+pub mod mindmap_cli;
 pub mod models;
 pub mod path_guard;
 pub mod settings;

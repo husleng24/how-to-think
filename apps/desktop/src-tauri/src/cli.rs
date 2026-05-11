@@ -1,12 +1,13 @@
 use crate::command_service::{
     CliErrorCode, CliResultEnvelope, CommandService, CommandServicePaths, DoctorCheckStatus,
     DoctorReport, DoctorRequest, HelpData, MarkdownLinksResolveCliRequest, MarkdownParseCliRequest,
-    MarkdownSerializeCliRequest, UiActionRequest, VersionData, WorkspaceFileCreateRequest,
-    WorkspaceFileDeleteRequest, WorkspaceFileOpenRequest, WorkspaceFileRenameRequest,
-    WorkspaceFileSaveRequest, WorkspacePathRequest,
+    MarkdownSerializeCliRequest, MindMapCliRequest, UiActionRequest, VersionData,
+    WorkspaceFileCreateRequest, WorkspaceFileDeleteRequest, WorkspaceFileOpenRequest,
+    WorkspaceFileRenameRequest, WorkspaceFileSaveRequest, WorkspacePathRequest,
 };
 use crate::desktop_bridge::CliUiActionKind;
 use crate::links::model::{LinkKind, LinkReference};
+use crate::mindmap_cli::MindMapSiblingPosition;
 use crate::models::FileVersion;
 use how_to_think_markdown::{
     MarkdownLineEnding, MindMapDocument, ParseMode, SerializePreservationPolicy,
@@ -45,6 +46,17 @@ pub struct CliOptions {
     pub link_label: Option<String>,
     pub link_alias: Option<String>,
     pub open_in_desktop: bool,
+    pub node_id: Option<String>,
+    pub node_path: Option<String>,
+    pub parent_id: Option<String>,
+    pub parent_path: Option<String>,
+    pub text: Option<String>,
+    pub title: Option<String>,
+    pub root_text: Option<String>,
+    pub index: Option<usize>,
+    pub position: MindMapSiblingPosition,
+    pub child_ids: Vec<String>,
+    pub template: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +79,20 @@ pub enum CliCommand {
     MarkdownCheck,
     MarkdownSerialize,
     MarkdownLinksResolve,
+    MindMapRead,
+    MindMapCreate,
+    MindMapNodeAdd,
+    MindMapNodeUpdate,
+    MindMapBranchMove,
+    MindMapBranchDelete,
+    MindMapSiblingsReorder,
+    MindMapCollapse,
+    MindMapExpand,
+    MindMapFocusNode,
+    MindMapFitView,
+    MindMapDragLayout,
+    MindMapHistoryUndo,
+    MindMapHistoryRedo,
     UiOpen,
     UiFocus,
     UiReview,
@@ -139,6 +165,17 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut link_label = None;
     let mut link_alias = None;
     let mut open_in_desktop = false;
+    let mut node_id = None;
+    let mut node_path = None;
+    let mut parent_id = None;
+    let mut parent_path = None;
+    let mut text = None;
+    let mut title = None;
+    let mut root_text = None;
+    let mut index_value = None;
+    let mut position = MindMapSiblingPosition::After;
+    let mut child_ids = Vec::new();
+    let mut template = None;
     let mut command = None;
     let mut index = 0;
 
@@ -267,6 +304,64 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 open_in_desktop = true;
                 index += 1;
             }
+            "--node-id" => {
+                let value = required_value(args, index)?;
+                node_id = Some(value.to_owned());
+                index += 2;
+            }
+            "--node-path" => {
+                let value = required_any_value(args, index)?;
+                node_path = Some(value.to_owned());
+                index += 2;
+            }
+            "--parent-id" => {
+                let value = required_value(args, index)?;
+                parent_id = Some(value.to_owned());
+                index += 2;
+            }
+            "--parent-path" => {
+                let value = required_any_value(args, index)?;
+                parent_path = Some(value.to_owned());
+                index += 2;
+            }
+            "--text" => {
+                let value = required_any_value(args, index)?;
+                text = Some(value.to_owned());
+                index += 2;
+            }
+            "--title" => {
+                let value = required_any_value(args, index)?;
+                title = Some(value.to_owned());
+                index += 2;
+            }
+            "--root-text" => {
+                let value = required_any_value(args, index)?;
+                root_text = Some(value.to_owned());
+                index += 2;
+            }
+            "--index" => {
+                let value = required_value(args, index)?;
+                index_value = Some(value.parse::<usize>().map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!("Flag `--index` must be a non-negative integer: {error}"),
+                })?);
+                index += 2;
+            }
+            "--position" => {
+                let value = required_value(args, index)?;
+                position = parse_mindmap_position(value)?;
+                index += 2;
+            }
+            "--child-ids" | "--children" => {
+                let value = required_any_value(args, index)?;
+                child_ids = parse_child_ids(value)?;
+                index += 2;
+            }
+            "--template" => {
+                let value = required_value(args, index)?;
+                template = Some(value.to_owned());
+                index += 2;
+            }
             "--help" | "-h" => {
                 command = set_command(command, CliCommand::Help)?;
                 index += 1;
@@ -312,6 +407,17 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         link_label,
         link_alias,
         open_in_desktop,
+        node_id,
+        node_path,
+        parent_id,
+        parent_path,
+        text,
+        title,
+        root_text,
+        index: index_value,
+        position,
+        child_ids,
+        template,
     })
 }
 
@@ -360,7 +466,21 @@ fn execute_options(options: CliOptions) -> CliExecution {
         | CliCommand::MarkdownParse
         | CliCommand::MarkdownCheck
         | CliCommand::MarkdownSerialize
-        | CliCommand::MarkdownLinksResolve => match CommandServicePaths::resolve(
+        | CliCommand::MarkdownLinksResolve
+        | CliCommand::MindMapRead
+        | CliCommand::MindMapCreate
+        | CliCommand::MindMapNodeAdd
+        | CliCommand::MindMapNodeUpdate
+        | CliCommand::MindMapBranchMove
+        | CliCommand::MindMapBranchDelete
+        | CliCommand::MindMapSiblingsReorder
+        | CliCommand::MindMapCollapse
+        | CliCommand::MindMapExpand
+        | CliCommand::MindMapFocusNode
+        | CliCommand::MindMapFitView
+        | CliCommand::MindMapDragLayout
+        | CliCommand::MindMapHistoryUndo
+        | CliCommand::MindMapHistoryRedo => match CommandServicePaths::resolve(
             options.app_data_dir.clone(),
             options.app_config_dir.clone(),
         ) {
@@ -532,6 +652,40 @@ fn command_envelope(
                 }),
             )
         }
+        CliCommand::MindMapRead => Ok(service.read_mindmap_cli(mindmap_request(options)?)),
+        CliCommand::MindMapCreate => Ok(service.create_mindmap_cli(mindmap_request(options)?)),
+        CliCommand::MindMapNodeAdd => Ok(service.add_mindmap_node_cli(mindmap_request(options)?)),
+        CliCommand::MindMapNodeUpdate => {
+            Ok(service.update_mindmap_node_cli(mindmap_request(options)?))
+        }
+        CliCommand::MindMapBranchMove => {
+            Ok(service.move_mindmap_branch_cli(mindmap_request(options)?))
+        }
+        CliCommand::MindMapBranchDelete => {
+            Ok(service.delete_mindmap_branch_cli(mindmap_request(options)?))
+        }
+        CliCommand::MindMapSiblingsReorder => {
+            Ok(service.reorder_mindmap_siblings_cli(mindmap_request(options)?))
+        }
+        CliCommand::MindMapCollapse => {
+            Ok(service.unsupported_mindmap_cli_action("mindmap.collapse", "mindmap.collapse"))
+        }
+        CliCommand::MindMapExpand => {
+            Ok(service.unsupported_mindmap_cli_action("mindmap.expand", "mindmap.expand"))
+        }
+        CliCommand::MindMapHistoryUndo => {
+            Ok(service
+                .unsupported_mindmap_cli_action("mindmap.history.undo", "mindmap.history.undo"))
+        }
+        CliCommand::MindMapHistoryRedo => {
+            Ok(service
+                .unsupported_mindmap_cli_action("mindmap.history.redo", "mindmap.history.redo"))
+        }
+        CliCommand::MindMapFocusNode
+        | CliCommand::MindMapFitView
+        | CliCommand::MindMapDragLayout => {
+            Ok(service.request_desktop_ui(mindmap_ui_action_request(options)))
+        }
         _ => Err(CliParseError {
             code: CliErrorCode::CommandUnavailable,
             message: format!(
@@ -539,6 +693,79 @@ fn command_envelope(
                 operation_id(options.command)
             ),
         }),
+    }
+}
+
+fn mindmap_request(options: &CliOptions) -> Result<MindMapCliRequest, CliParseError> {
+    Ok(MindMapCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        relative_path: required_path(options)?,
+        expected_version: options.expected_version.clone(),
+        confirmation_token: options.confirmation_token.clone(),
+        non_interactive: options.non_interactive,
+        parse_mode: options.parse_mode,
+        preservation_policy: options.preservation_policy,
+        line_ending: options.line_ending,
+        node_id: options.node_id.clone(),
+        node_path: options.node_path.clone(),
+        parent_id: options.parent_id.clone(),
+        parent_path: options.parent_path.clone(),
+        text: options.text.clone(),
+        title: options.title.clone(),
+        root_text: options.root_text.clone(),
+        index: options.index,
+        position: options.position,
+        child_ids: options.child_ids.clone(),
+        template: options.template.clone(),
+    })
+}
+
+fn mindmap_ui_action_request(options: &CliOptions) -> UiActionRequest {
+    let command_id = operation_id(options.command).to_owned();
+    let kind = match options.command {
+        CliCommand::MindMapFocusNode | CliCommand::MindMapFitView => {
+            CliUiActionKind::FocusExistingWindow
+        }
+        CliCommand::MindMapDragLayout => CliUiActionKind::OpenReviewSurface,
+        _ => CliUiActionKind::OpenWindow,
+    };
+    let target = options.target.clone().unwrap_or_else(|| {
+        let mut target = String::new();
+        if let Some(workspace_path) = &options.workspace_path {
+            target.push_str(&format!("workspace:{}", workspace_path.display()));
+        } else {
+            target.push_str("workspace");
+        }
+        if let Some(relative_path) = &options.relative_path {
+            target.push_str(&format!("/file:{relative_path}"));
+        }
+        if let Some(node_id) = &options.node_id {
+            target.push_str(&format!("/node:{node_id}"));
+        } else if let Some(node_path) = &options.node_path {
+            target.push_str(&format!("/node-path:{node_path}"));
+        }
+        target
+    });
+    let reason = options
+        .reason
+        .clone()
+        .unwrap_or_else(|| match options.command {
+            CliCommand::MindMapFocusNode => {
+                "Focus the requested mind map node in the desktop UI.".to_owned()
+            }
+            CliCommand::MindMapFitView => "Fit the mind map view in the desktop UI.".to_owned(),
+            CliCommand::MindMapDragLayout => {
+                "Manual layout changes require the desktop UI.".to_owned()
+            }
+            _ => "Open the desktop UI for this mind map action.".to_owned(),
+        });
+
+    UiActionRequest {
+        command_id,
+        kind,
+        target,
+        reason,
+        non_interactive: options.non_interactive,
     }
 }
 
@@ -693,6 +920,13 @@ fn render_human_envelope_data(envelope: &CliResultEnvelope) -> String {
                 )
             }),
         "markdown.links.resolve" => render_link_resolutions(data),
+        "mindmap.read" => render_mindmap_read(data),
+        "mindmap.create"
+        | "mindmap.node.add"
+        | "mindmap.node.update"
+        | "mindmap.branch.move"
+        | "mindmap.branch.delete"
+        | "mindmap.siblings.reorder" => render_mindmap_mutation(data),
         _ => serde_json::to_string_pretty(data).expect("CLI data must serialize"),
     }
 }
@@ -733,6 +967,34 @@ fn render_link_resolutions(data: &Value) -> String {
         ));
     }
     output
+}
+
+fn render_mindmap_read(data: &Value) -> String {
+    let summary = &data["summary"];
+    let selected = &data["selectedNode"];
+    let mut output = format!(
+        "Mind map: {}\nTitle: {}\nNodes: {}\nDiagnostics: {}",
+        text(data, "relativePath"),
+        text(summary, "title"),
+        summary["contentNodeCount"].as_u64().unwrap_or_default(),
+        summary["diagnosticCount"].as_u64().unwrap_or_default()
+    );
+    if selected.is_object() {
+        output.push_str(&format!("\nSelected: {}", text(selected, "title")));
+    }
+    output
+}
+
+fn render_mindmap_mutation(data: &Value) -> String {
+    let changed = data["changedNodeIds"].as_array().map_or(0, Vec::len);
+    format!(
+        "{} {} ({})\nChanged nodes: {}\nDiagnostics: {}",
+        text(data, "command"),
+        text(data, "affectedFile"),
+        text(&data["version"], "token"),
+        changed,
+        data["diagnostics"].as_array().map_or(0, Vec::len)
+    )
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -805,6 +1067,20 @@ fn operation_id(command: CliCommand) -> &'static str {
         CliCommand::MarkdownCheck => "markdown.check",
         CliCommand::MarkdownSerialize => "markdown.serialize",
         CliCommand::MarkdownLinksResolve => "markdown.links.resolve",
+        CliCommand::MindMapRead => "mindmap.read",
+        CliCommand::MindMapCreate => "mindmap.create",
+        CliCommand::MindMapNodeAdd => "mindmap.node.add",
+        CliCommand::MindMapNodeUpdate => "mindmap.node.update",
+        CliCommand::MindMapBranchMove => "mindmap.branch.move",
+        CliCommand::MindMapBranchDelete => "mindmap.branch.delete",
+        CliCommand::MindMapSiblingsReorder => "mindmap.siblings.reorder",
+        CliCommand::MindMapCollapse => "mindmap.collapse",
+        CliCommand::MindMapExpand => "mindmap.expand",
+        CliCommand::MindMapFocusNode => "mindmap.focus-node",
+        CliCommand::MindMapFitView => "mindmap.fit-view",
+        CliCommand::MindMapDragLayout => "mindmap.drag-layout",
+        CliCommand::MindMapHistoryUndo => "mindmap.history.undo",
+        CliCommand::MindMapHistoryRedo => "mindmap.history.redo",
         CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => ui_operation_id(command),
     }
 }
@@ -899,6 +1175,24 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "markdown.check" => Ok(CliCommand::MarkdownCheck),
         "markdown.serialize" | "markdown.export-preview" => Ok(CliCommand::MarkdownSerialize),
         "markdown.links.resolve" => Ok(CliCommand::MarkdownLinksResolve),
+        "mindmap.read" | "mindmap.query" => Ok(CliCommand::MindMapRead),
+        "mindmap.create" => Ok(CliCommand::MindMapCreate),
+        "mindmap.node.add" | "mindmap.add-child" | "mindmap.add-sibling" => {
+            Ok(CliCommand::MindMapNodeAdd)
+        }
+        "mindmap.node.update" | "mindmap.rename-node" => Ok(CliCommand::MindMapNodeUpdate),
+        "mindmap.branch.move" | "mindmap.move-subtree" => Ok(CliCommand::MindMapBranchMove),
+        "mindmap.branch.delete" | "mindmap.delete-subtree" => Ok(CliCommand::MindMapBranchDelete),
+        "mindmap.siblings.reorder" | "mindmap.reorder-siblings" => {
+            Ok(CliCommand::MindMapSiblingsReorder)
+        }
+        "mindmap.collapse" | "mindmap.collapse-node" => Ok(CliCommand::MindMapCollapse),
+        "mindmap.expand" | "mindmap.expand-node" => Ok(CliCommand::MindMapExpand),
+        "mindmap.focus-node" => Ok(CliCommand::MindMapFocusNode),
+        "mindmap.fit-view" => Ok(CliCommand::MindMapFitView),
+        "mindmap.drag-layout" => Ok(CliCommand::MindMapDragLayout),
+        "mindmap.history.undo" => Ok(CliCommand::MindMapHistoryUndo),
+        "mindmap.history.redo" => Ok(CliCommand::MindMapHistoryRedo),
         "ui.open" => Ok(CliCommand::UiOpen),
         "ui.focus" => Ok(CliCommand::UiFocus),
         "ui.review" => Ok(CliCommand::UiReview),
@@ -961,6 +1255,33 @@ fn parse_link_kind(value: &str) -> Result<LinkKind, CliParseError> {
             message: format!("Unsupported link kind `{value}`."),
         }),
     }
+}
+
+fn parse_mindmap_position(value: &str) -> Result<MindMapSiblingPosition, CliParseError> {
+    match value {
+        "before" => Ok(MindMapSiblingPosition::Before),
+        "after" => Ok(MindMapSiblingPosition::After),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported mind map sibling position `{value}`."),
+        }),
+    }
+}
+
+fn parse_child_ids(value: &str) -> Result<Vec<String>, CliParseError> {
+    let child_ids = value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if child_ids.is_empty() {
+        return Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: "Flag `--child-ids` must include at least one node id.".to_owned(),
+        });
+    }
+    Ok(child_ids)
 }
 
 fn parse_output_mode(value: &str) -> Result<OutputMode, CliParseError> {
@@ -1152,6 +1473,53 @@ mod tests {
         assert_eq!(options.link_target.as_deref(), Some("Topic"));
         assert_eq!(options.link_kind, LinkKind::ObsidianWiki);
         assert_eq!(options.link_alias.as_deref(), Some("Readable topic"));
+    }
+
+    #[test]
+    fn parses_mindmap_node_add_options() {
+        let expected_version = version_json();
+        let options = parse_args(&args(&[
+            "mindmap.node.add",
+            "--path",
+            "plan.md",
+            "--parent-path",
+            "Plan/Alpha",
+            "--text",
+            "Detail",
+            "--index",
+            "0",
+            "--expected-version",
+            &expected_version,
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::MindMapNodeAdd);
+        assert_eq!(options.relative_path.as_deref(), Some("plan.md"));
+        assert_eq!(options.parent_path.as_deref(), Some("Plan/Alpha"));
+        assert_eq!(options.text.as_deref(), Some("Detail"));
+        assert_eq!(options.index, Some(0));
+        assert_eq!(options.expected_version.as_ref().unwrap().token, "token");
+    }
+
+    #[test]
+    fn parses_mindmap_reorder_child_ids_and_position() {
+        let options = parse_args(&args(&[
+            "mindmap.reorder-siblings",
+            "--path",
+            "plan.md",
+            "--parent-id",
+            "root",
+            "--child-ids",
+            "b,a",
+            "--position",
+            "before",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::MindMapSiblingsReorder);
+        assert_eq!(options.parent_id.as_deref(), Some("root"));
+        assert_eq!(options.child_ids, vec!["b", "a"]);
+        assert_eq!(options.position, MindMapSiblingPosition::Before);
     }
 
     #[test]
