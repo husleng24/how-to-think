@@ -1,6 +1,7 @@
 use serde_json::{json, Value};
 use std::env;
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
 const MOCK_PROVIDER_SCRIPT: &str = concat!(
@@ -27,6 +28,29 @@ fn json_output(args: &[&str]) -> (Output, Value) {
     let output = cli_output(args);
     let envelope: Value = serde_json::from_str(&stdout(&output)).unwrap();
     (output, envelope)
+}
+
+fn git(cwd: &Path, args: &[&str]) -> Output {
+    let output = Command::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .expect("git should run");
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout: {}\nstderr: {}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn git_stdout(cwd: &Path, args: &[&str]) -> String {
+    String::from_utf8(git(cwd, args).stdout)
+        .expect("git stdout should be UTF-8")
+        .trim_end()
+        .to_owned()
 }
 
 fn assert_file_prefix(path: &std::path::Path, expected: &[u8]) {
@@ -459,6 +483,289 @@ fn markdown_parse_and_link_resolution_json_report_diagnostics() {
     assert_eq!(
         ambiguous["data"]["links"][0]["diagnostics"][0]["code"],
         "ambiguous_target"
+    );
+}
+
+#[test]
+fn git_cli_runs_local_snapshot_history_diff_and_restore_flow() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let (_, detected) = json_output(&[
+        "--json",
+        "git.detect",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(detected["ok"], true);
+    assert_eq!(detected["data"]["state"], "not_repository");
+
+    let (init_probe_output, init_probe) = json_output(&[
+        "--json",
+        "git.init",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(init_probe_output.status.code(), Some(30));
+    assert_eq!(init_probe["error"]["code"], "confirmation_required");
+    let init_token = init_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, init_confirmed) = json_output(&[
+        "--json",
+        "git.init",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--confirm-token",
+        init_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(init_confirmed["ok"], true);
+    assert_eq!(init_confirmed["data"]["state"], "valid_repository");
+
+    fs::write(workspace.join("idea.md"), "# Old\n").unwrap();
+    let (_, status) = json_output(&[
+        "--json",
+        "git.status",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(status["ok"], true);
+    assert_eq!(status["data"]["entries"][0]["relativePath"], "idea.md");
+    assert_eq!(status["data"]["entries"][0]["unstaged"], "untracked");
+    let stale_repo_token = status["data"]["token"].to_string();
+
+    fs::write(workspace.join("later.md"), "# Later\n").unwrap();
+    let (stale_probe_output, stale_probe) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Stale snapshot",
+        "--repo-token",
+        &stale_repo_token,
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(stale_probe_output.status.code(), Some(30));
+    let stale_confirm = stale_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+    let (stale_confirmed_output, stale_confirmed) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Stale snapshot",
+        "--repo-token",
+        &stale_repo_token,
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--confirm-token",
+        stale_confirm,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(stale_confirmed_output.status.code(), Some(20));
+    assert_eq!(stale_confirmed["error"]["code"], "external_state_changed");
+    fs::remove_file(workspace.join("later.md")).unwrap();
+
+    let (snapshot_probe_output, snapshot_probe) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Initial idea",
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(snapshot_probe_output.status.code(), Some(30));
+    let snapshot_token = snapshot_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+    let (_, first_snapshot) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Initial idea",
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--confirm-token",
+        snapshot_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(first_snapshot["ok"], true);
+    let old_commit = first_snapshot["data"]["commitOid"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
+    fs::write(workspace.join("idea.md"), "# Current\n").unwrap();
+    let (second_probe_output, second_probe) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Current idea",
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(second_probe_output.status.code(), Some(30));
+    let second_token = second_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+    let (_, second_snapshot) = json_output(&[
+        "--json",
+        "git.snapshot",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--message",
+        "Current idea",
+        "--author-name",
+        "Test User",
+        "--author-email",
+        "test@example.com",
+        "--confirm-token",
+        second_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(second_snapshot["ok"], true);
+    let head_before_restore = git_stdout(&workspace, &["rev-parse", "HEAD"]);
+
+    let (_, history) = json_output(&[
+        "--json",
+        "git.history",
+        "idea.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--max-entries",
+        "5",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(history["ok"], true);
+    assert_eq!(history["data"].as_array().unwrap().len(), 2);
+
+    fs::write(workspace.join("idea.md"), "# Current\n\n## More\n").unwrap();
+    let (_, diff) = json_output(&[
+        "--json",
+        "git.diff",
+        "idea.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--base-ref",
+        "HEAD",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(diff["ok"], true);
+    assert_eq!(diff["data"]["fileCount"], 1);
+    assert_eq!(diff["data"]["additions"], 2);
+
+    let (restore_probe_output, restore_probe) = json_output(&[
+        "--json",
+        "git.restore",
+        "idea.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--source-ref",
+        &old_commit,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(restore_probe_output.status.code(), Some(30));
+    let restore_token = restore_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+    let (_, restored) = json_output(&[
+        "--json",
+        "git.restore",
+        "idea.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--source-ref",
+        &old_commit,
+        "--confirm-token",
+        restore_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(restored["ok"], true);
+    assert_eq!(restored["data"]["snapshot"]["content"], "# Old\n");
+    assert_eq!(
+        fs::read_to_string(workspace.join("idea.md")).unwrap(),
+        "# Old\n"
+    );
+    assert_eq!(
+        git_stdout(&workspace, &["rev-parse", "HEAD"]),
+        head_before_restore
+    );
+    assert_eq!(
+        git_stdout(&workspace, &["status", "--porcelain"]),
+        " M idea.md"
     );
 }
 

@@ -19,6 +19,12 @@ use crate::desktop_bridge::{
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::export_cli::{self, RenderCliRequest, RENDER_OPERATION_ID};
+use crate::git_contracts::{
+    GitAuthorIdentity, GitDiffMode, GitDiffRequest, GitExpectedFileState, GitHistoryRequest,
+    GitOperationError, GitOperationErrorCode, GitRepositoryStateToken, GitRestoreRequest,
+    GitServiceOperation, GitSnapshotRequest, GitStatusChangeKind, GitStatusEntry,
+};
+use crate::git_service;
 use crate::links::index::WorkspaceLinkIndex;
 use crate::links::model::{LinkKind, LinkReference, ResolveLinksResponse};
 use crate::links::resolver;
@@ -47,7 +53,7 @@ use how_to_think_markdown::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::path::{Path, PathBuf};
 
@@ -351,6 +357,53 @@ pub struct MindMapCliRequest {
     pub template: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitInitCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub confirmation_token: Option<String>,
+    pub non_interactive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitSnapshotCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub message: String,
+    pub scope_paths: Vec<WorkspaceRelativePath>,
+    pub expected_repo_token: Option<GitRepositoryStateToken>,
+    pub expected_file_states: Vec<GitExpectedFileState>,
+    pub author: Option<GitAuthorIdentity>,
+    pub confirmation_token: Option<String>,
+    pub non_interactive: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitHistoryCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub relative_path: Option<WorkspaceRelativePath>,
+    pub max_entries: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitDiffCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub mode: GitDiffMode,
+    pub relative_path: Option<WorkspaceRelativePath>,
+    pub base_ref: Option<String>,
+    pub head_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitRestoreCliRequest {
+    pub workspace_path: Option<PathBuf>,
+    pub relative_path: WorkspaceRelativePath,
+    pub source_ref: String,
+    pub expected_repo_token: Option<GitRepositoryStateToken>,
+    pub expected_file_version: Option<FileVersion>,
+    pub confirmation_token: Option<String>,
+    pub non_interactive: bool,
+    pub dry_run: bool,
+}
+
 impl CommandServicePaths {
     pub fn resolve(
         app_data_dir: Option<PathBuf>,
@@ -483,6 +536,39 @@ impl CommandService {
                     name: "render",
                     description:
                         "Render a Markdown mind map to svg, png, pdf, or markdown output.",
+                },
+                HelpCommand {
+                    name: "git.detect",
+                    description: "Inspect Git availability and repository state for a workspace.",
+                },
+                HelpCommand {
+                    name: "git.init",
+                    description: "Enable local Git metadata after preflight and confirmation.",
+                },
+                HelpCommand {
+                    name: "git.status",
+                    description: "Show normalized local Git status for workspace files.",
+                },
+                HelpCommand {
+                    name: "git.refresh",
+                    description: "Refresh local Git status and blocked-state information.",
+                },
+                HelpCommand {
+                    name: "git.snapshot",
+                    description: "Create a confirmed local Git snapshot from pending changes.",
+                },
+                HelpCommand {
+                    name: "git.history",
+                    description: "List workspace or file history from the local repository.",
+                },
+                HelpCommand {
+                    name: "git.diff",
+                    description: "Show local Git diff hunks in human or JSON output.",
+                },
+                HelpCommand {
+                    name: "git.restore",
+                    description:
+                        "Restore historical Markdown content as a pending worktree change.",
                 },
                 HelpCommand {
                     name: "ai.provider.list",
@@ -1101,6 +1187,269 @@ impl CommandService {
                 CliResultEnvelope::success(operation_id, result)
             }
             Err(error) => CliResultEnvelope::from_workspace_error(operation_id, error),
+        }
+    }
+
+    pub fn detect_git_repository_cli(&self, workspace_path: Option<PathBuf>) -> CliResultEnvelope {
+        let operation_id = "git.detect";
+        let (record, _) =
+            match self.record_for_cli_workspace(workspace_path, WorkspaceOperation::ListFiles) {
+                Ok(value) => value,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            };
+
+        match git_service::detect_repository(&record) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn init_git_repository_cli(&self, request: GitInitCliRequest) -> CliResultEnvelope {
+        let operation_id = "git.init";
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: CliGuardedOperation::GitInit,
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: Vec::new(),
+            expected_versions: Vec::new(),
+            confirmation_token: request.confirmation_token.clone(),
+            non_interactive: request.non_interactive,
+            risks: Vec::new(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        match git_service::enable_git_for_workspace(&record) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn git_status_cli(&self, workspace_path: Option<PathBuf>) -> CliResultEnvelope {
+        let operation_id = "git.status";
+        let (record, _) =
+            match self.record_for_cli_workspace(workspace_path, WorkspaceOperation::ListFiles) {
+                Ok(value) => value,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            };
+
+        match git_service::get_git_status(&record) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn git_refresh_cli(&self, workspace_path: Option<PathBuf>) -> CliResultEnvelope {
+        let operation_id = "git.refresh";
+        let (record, _) =
+            match self.record_for_cli_workspace(workspace_path, WorkspaceOperation::ListFiles) {
+                Ok(value) => value,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            };
+
+        match git_service::refresh_git_state(&record) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn create_git_snapshot_cli(&self, request: GitSnapshotCliRequest) -> CliResultEnvelope {
+        let operation_id = "git.snapshot";
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let status = match git_service::get_git_status(&record) {
+            Ok(status) => status,
+            Err(error) => return CliResultEnvelope::from_git_error(operation_id, error),
+        };
+        let Some(expected_repo_token) = request
+            .expected_repo_token
+            .clone()
+            .or_else(|| status.token.clone())
+        else {
+            return CliResultEnvelope::from_git_error(
+                operation_id,
+                GitOperationError::new(
+                    GitOperationErrorCode::ExternalStateChanged,
+                    GitServiceOperation::Snapshot,
+                    "Git repository state must be refreshed before creating a snapshot.",
+                    true,
+                ),
+            );
+        };
+        let preflight_paths = if request.scope_paths.is_empty() {
+            snapshot_candidate_paths(&status.entries)
+        } else {
+            request.scope_paths.clone()
+        };
+        let expected_file_states = if request.expected_file_states.is_empty() {
+            match collect_expected_git_file_states(&record, &preflight_paths) {
+                Ok(states) => states,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            }
+        } else {
+            request.expected_file_states.clone()
+        };
+        let expected_versions = expected_file_states
+            .iter()
+            .map(|state| CliExpectedVersion {
+                relative_path: state.relative_path.clone(),
+                version: state.expected_version.clone(),
+            })
+            .collect();
+
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: CliGuardedOperation::GitSnapshot,
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: preflight_paths,
+            expected_versions,
+            confirmation_token: request.confirmation_token.clone(),
+            non_interactive: request.non_interactive,
+            risks: Vec::new(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        let snapshot_request = GitSnapshotRequest {
+            workspace_id: record.info.id.clone(),
+            message: request.message,
+            scope_paths: request.scope_paths,
+            expected_repo_token,
+            expected_file_states,
+            author: request.author,
+        };
+        match git_service::create_snapshot(&record, snapshot_request) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn git_history_cli(&self, request: GitHistoryCliRequest) -> CliResultEnvelope {
+        let operation_id = "git.history";
+        let (record, _) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::ListFiles)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let history_request = GitHistoryRequest {
+            workspace_id: record.info.id.clone(),
+            relative_path: request.relative_path,
+            max_entries: request.max_entries,
+        };
+
+        match git_service::list_git_history(&record, history_request) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn git_diff_cli(&self, request: GitDiffCliRequest) -> CliResultEnvelope {
+        let operation_id = "git.diff";
+        let (record, _) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::ListFiles)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let diff_request = GitDiffRequest {
+            workspace_id: record.info.id.clone(),
+            mode: request.mode,
+            relative_path: request.relative_path,
+            base_ref: request.base_ref.or_else(|| Some("HEAD".to_owned())),
+            head_ref: request.head_ref,
+        };
+
+        match git_service::get_git_diff(&record, diff_request) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
+        }
+    }
+
+    pub fn restore_git_file_cli(&self, request: GitRestoreCliRequest) -> CliResultEnvelope {
+        let operation_id = "git.restore";
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path, WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let status = match git_service::get_git_status(&record) {
+            Ok(status) => status,
+            Err(error) => return CliResultEnvelope::from_git_error(operation_id, error),
+        };
+        let Some(expected_repo_token) = request
+            .expected_repo_token
+            .clone()
+            .or_else(|| status.token.clone())
+        else {
+            return CliResultEnvelope::from_git_error(
+                operation_id,
+                GitOperationError::new(
+                    GitOperationErrorCode::ExternalStateChanged,
+                    GitServiceOperation::Restore,
+                    "Git repository state must be refreshed before restoring a file.",
+                    true,
+                )
+                .with_relative_path(request.relative_path.clone()),
+            );
+        };
+        let expected_file_version = match request.expected_file_version.clone() {
+            Some(version) => version,
+            None => match documents::open_document(&record, &request.relative_path) {
+                Ok(snapshot) => snapshot.version,
+                Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+            },
+        };
+
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: CliGuardedOperation::GitRestore,
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: vec![request.relative_path.clone()],
+            expected_versions: vec![CliExpectedVersion {
+                relative_path: request.relative_path.clone(),
+                version: expected_file_version.clone(),
+            }],
+            confirmation_token: request.confirmation_token.clone(),
+            non_interactive: request.non_interactive,
+            risks: Vec::new(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        let restore_request = GitRestoreRequest {
+            workspace_id: record.info.id.clone(),
+            relative_path: request.relative_path,
+            source_ref: request.source_ref,
+            expected_repo_token,
+            expected_file_version,
+            editor_has_unsaved_changes: false,
+            dry_run: request.dry_run,
+        };
+        match git_service::restore_git_file(&record, restore_request) {
+            Ok(result) => CliResultEnvelope::success(operation_id, result),
+            Err(error) => CliResultEnvelope::from_git_error(operation_id, error),
         }
     }
 
@@ -2197,6 +2546,24 @@ impl CliResultEnvelope {
         envelope
     }
 
+    pub fn from_git_error(operation_id: impl Into<String>, error: GitOperationError) -> Self {
+        let code = cli_error_code_for_git_error(error.code);
+        let mut envelope = Self::error(operation_id, code, error.message);
+        if let Some(cli_error) = &mut envelope.error {
+            let mut details = error.details.unwrap_or_default();
+            details.insert("gitCode".to_owned(), json!(format!("{:?}", error.code)));
+            details.insert(
+                "gitOperation".to_owned(),
+                json!(format!("{:?}", error.operation)),
+            );
+            if let Some(relative_path) = error.relative_path {
+                details.insert("relativePath".to_owned(), json!(relative_path));
+            }
+            cli_error.details = Some(details);
+        }
+        envelope
+    }
+
     pub fn exit_code(&self) -> i32 {
         if self.ok {
             0
@@ -2388,6 +2755,74 @@ fn ai_error_envelope_with_diagnostics(
     envelope
 }
 
+fn snapshot_candidate_paths(entries: &[GitStatusEntry]) -> Vec<WorkspaceRelativePath> {
+    entries
+        .iter()
+        .filter(|entry| {
+            !entry.conflicted
+                && !matches!(
+                    primary_git_change_kind(entry),
+                    GitStatusChangeKind::Unmodified | GitStatusChangeKind::Ignored
+                )
+        })
+        .map(|entry| entry.relative_path.clone())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn collect_expected_git_file_states(
+    record: &WorkspaceRecord,
+    paths: &[WorkspaceRelativePath],
+) -> Result<Vec<GitExpectedFileState>, WorkspaceError> {
+    let mut seen = BTreeSet::new();
+    let mut states = Vec::new();
+
+    for relative_path in paths {
+        if !seen.insert(relative_path.clone()) {
+            continue;
+        }
+        let file_name = relative_path.rsplit('/').next().unwrap_or(relative_path);
+        if path_guard::supported_markdown_extension(file_name, record.info.case_sensitive).is_none()
+        {
+            continue;
+        }
+
+        match documents::open_document(record, relative_path) {
+            Ok(snapshot) => states.push(GitExpectedFileState {
+                relative_path: relative_path.clone(),
+                expected_version: snapshot.version,
+            }),
+            Err(error)
+                if matches!(
+                    error.code,
+                    WorkspaceErrorCode::FileNotFound | WorkspaceErrorCode::UnsupportedFileType
+                ) =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    Ok(states)
+}
+
+fn primary_git_change_kind(entry: &GitStatusEntry) -> GitStatusChangeKind {
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Ignored) {
+            return GitStatusChangeKind::Ignored;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if !matches!(kind, GitStatusChangeKind::Unmodified) {
+            return kind;
+        }
+    }
+
+    GitStatusChangeKind::Unmodified
+}
+
 fn cli_error_code_for_mindmap_error(code: MindMapCliErrorCode) -> CliErrorCode {
     match code {
         MindMapCliErrorCode::InvalidArguments => CliErrorCode::InvalidArguments,
@@ -2436,6 +2871,27 @@ fn cli_error_code_for_ai_error(code: AiErrorCode) -> CliErrorCode {
         | AiErrorCode::ProviderNonZeroExit
         | AiErrorCode::ProviderOutputMalformed
         | AiErrorCode::ProviderOutputTooLarge => CliErrorCode::ProviderUnavailable,
+    }
+}
+
+fn cli_error_code_for_git_error(code: GitOperationErrorCode) -> CliErrorCode {
+    match code {
+        GitOperationErrorCode::GitUnavailable => CliErrorCode::GitUnavailable,
+        GitOperationErrorCode::ExternalStateChanged => CliErrorCode::ExternalStateChanged,
+        GitOperationErrorCode::RestoreConflict => CliErrorCode::DirtyStateConflict,
+        GitOperationErrorCode::InvalidRef => CliErrorCode::InvalidArguments,
+        GitOperationErrorCode::FileNotInHistory => CliErrorCode::FileNotFound,
+        GitOperationErrorCode::UnknownGitError => CliErrorCode::InternalError,
+        GitOperationErrorCode::PermissionDenied => CliErrorCode::ValidationError,
+        GitOperationErrorCode::NotRepository
+        | GitOperationErrorCode::RepositoryCorrupt
+        | GitOperationErrorCode::ParentRepository
+        | GitOperationErrorCode::NestedRepository
+        | GitOperationErrorCode::BareRepository
+        | GitOperationErrorCode::DetachedHead
+        | GitOperationErrorCode::MergeConflict
+        | GitOperationErrorCode::IdentityMissing
+        | GitOperationErrorCode::NoChanges => CliErrorCode::RepositoryBlocked,
     }
 }
 
@@ -2670,6 +3126,29 @@ mod tests {
             cli_error_code_for_workspace_error(WorkspaceErrorCode::WatchUnavailable),
             CliErrorCode::BackendUnavailable
         );
+    }
+
+    #[test]
+    fn maps_git_errors_to_cli_error_codes_with_details() {
+        let envelope = CliResultEnvelope::from_git_error(
+            "git.restore",
+            GitOperationError::new(
+                GitOperationErrorCode::ExternalStateChanged,
+                GitServiceOperation::Restore,
+                "Repository changed.",
+                true,
+            )
+            .with_relative_path("notes.md"),
+        );
+
+        assert_eq!(
+            envelope.error.as_ref().unwrap().code,
+            CliErrorCode::ExternalStateChanged
+        );
+        let details = envelope.error.unwrap().details.unwrap();
+        assert_eq!(details["gitCode"], "ExternalStateChanged");
+        assert_eq!(details["gitOperation"], "Restore");
+        assert_eq!(details["relativePath"], "notes.md");
     }
 
     #[test]

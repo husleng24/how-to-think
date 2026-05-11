@@ -6,15 +6,19 @@ use crate::ai_cli::{
 };
 use crate::command_service::{
     CliErrorCode, CliResultEnvelope, CommandService, CommandServicePaths, DoctorCheckStatus,
-    DoctorReport, DoctorRequest, HelpData, MarkdownLinksResolveCliRequest, MarkdownParseCliRequest,
-    MarkdownSerializeCliRequest, MindMapCliRequest, UiActionRequest, VersionData,
-    WorkspaceFileCreateRequest, WorkspaceFileDeleteRequest, WorkspaceFileOpenRequest,
+    DoctorReport, DoctorRequest, GitDiffCliRequest, GitHistoryCliRequest, GitInitCliRequest,
+    GitRestoreCliRequest, GitSnapshotCliRequest, HelpData, MarkdownLinksResolveCliRequest,
+    MarkdownParseCliRequest, MarkdownSerializeCliRequest, MindMapCliRequest, UiActionRequest,
+    VersionData, WorkspaceFileCreateRequest, WorkspaceFileDeleteRequest, WorkspaceFileOpenRequest,
     WorkspaceFileRenameRequest, WorkspaceFileSaveRequest, WorkspacePathRequest,
 };
 use crate::desktop_bridge::CliUiActionKind;
 use crate::export_cli::{
     normalize_cli_relative_path, parse_render_export_format, parse_render_scope, RenderCliRequest,
     RenderExportFormat, RenderExportScope,
+};
+use crate::git_contracts::{
+    GitAuthorIdentity, GitDiffMode, GitExpectedFileState, GitRepositoryStateToken,
 };
 use crate::links::model::{LinkKind, LinkReference};
 use crate::mindmap_cli::MindMapSiblingPosition;
@@ -71,6 +75,18 @@ pub struct CliOptions {
     pub render_output_path: Option<String>,
     pub render_scope: RenderExportScope,
     pub overwrite: bool,
+    pub git_message: Option<String>,
+    pub git_scope_paths: Vec<String>,
+    pub expected_repo_token: Option<GitRepositoryStateToken>,
+    pub expected_file_states: Vec<GitExpectedFileState>,
+    pub git_author_name: Option<String>,
+    pub git_author_email: Option<String>,
+    pub git_max_entries: Option<usize>,
+    pub git_diff_mode: GitDiffMode,
+    pub git_base_ref: Option<String>,
+    pub git_head_ref: Option<String>,
+    pub git_source_ref: Option<String>,
+    pub dry_run: bool,
     pub provider_id: Option<String>,
     pub session_id: Option<String>,
     pub prompt: Option<String>,
@@ -123,6 +139,14 @@ pub enum CliCommand {
     MindMapHistoryUndo,
     MindMapHistoryRedo,
     Render,
+    GitDetect,
+    GitInit,
+    GitStatus,
+    GitRefresh,
+    GitSnapshot,
+    GitHistory,
+    GitDiff,
+    GitRestore,
     AiProviderList,
     AiProviderHealth,
     AiContextPreview,
@@ -216,6 +240,18 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut render_output_path = None;
     let mut render_scope = RenderExportScope::CurrentFile;
     let mut overwrite = false;
+    let mut git_message = None;
+    let mut git_scope_paths = Vec::new();
+    let mut expected_repo_token = None;
+    let mut expected_file_states = Vec::new();
+    let mut git_author_name = None;
+    let mut git_author_email = None;
+    let mut git_max_entries = None;
+    let mut git_diff_mode = GitDiffMode::WorkingTree;
+    let mut git_base_ref = None;
+    let mut git_head_ref = None;
+    let mut git_source_ref = None;
+    let mut dry_run = false;
     let mut provider_id = None;
     let mut session_id = None;
     let mut prompt = None;
@@ -325,6 +361,76 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                         ),
                     })?);
                 index += 2;
+            }
+            "--message" | "-m" => {
+                let value = required_any_value(args, index)?;
+                git_message = Some(value.to_owned());
+                index += 2;
+            }
+            "--paths" | "--scope-paths" => {
+                let value = required_any_value(args, index)?;
+                git_scope_paths = parse_string_list(value)?;
+                index += 2;
+            }
+            "--repo-token" | "--expected-repo-token" => {
+                let value = required_any_value(args, index)?;
+                expected_repo_token =
+                    Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                        code: CliErrorCode::InvalidArguments,
+                        message: format!(
+                            "Flag `--expected-repo-token` must be GitRepositoryStateToken JSON: {error}"
+                        ),
+                    })?);
+                index += 2;
+            }
+            "--expected-file-states" => {
+                let value = required_any_value(args, index)?;
+                expected_file_states =
+                    serde_json::from_str(value).map_err(|error| CliParseError {
+                        code: CliErrorCode::InvalidArguments,
+                        message: format!(
+                            "Flag `--expected-file-states` must be GitExpectedFileState[] JSON: {error}"
+                        ),
+                    })?;
+                index += 2;
+            }
+            "--author-name" => {
+                let value = required_any_value(args, index)?;
+                git_author_name = Some(value.to_owned());
+                index += 2;
+            }
+            "--author-email" => {
+                let value = required_any_value(args, index)?;
+                git_author_email = Some(value.to_owned());
+                index += 2;
+            }
+            "--max-entries" => {
+                git_max_entries = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--diff-mode" => {
+                let value = required_value(args, index)?;
+                git_diff_mode = parse_git_diff_mode(value)?;
+                index += 2;
+            }
+            "--base-ref" => {
+                let value = required_value(args, index)?;
+                git_base_ref = Some(value.to_owned());
+                index += 2;
+            }
+            "--head-ref" => {
+                let value = required_value(args, index)?;
+                git_head_ref = Some(value.to_owned());
+                index += 2;
+            }
+            "--source-ref" | "--ref" => {
+                let value = required_value(args, index)?;
+                git_source_ref = Some(value.to_owned());
+                index += 2;
+            }
+            "--dry-run" => {
+                dry_run = true;
+                index += 1;
             }
             "--document-json" if is_ai_command_context(command, args) => {
                 let value = required_any_value(args, index)?;
@@ -559,6 +665,10 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 relative_path = Some(normalize_cli_relative_path(value));
                 index += 1;
             }
+            value if is_git_file_command(command) && relative_path.is_none() => {
+                relative_path = Some(normalize_cli_relative_path(value));
+                index += 1;
+            }
             value => {
                 command = set_command(command, parse_command(value)?)?;
                 index += 1;
@@ -605,6 +715,18 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         render_output_path,
         render_scope,
         overwrite,
+        git_message,
+        git_scope_paths,
+        expected_repo_token,
+        expected_file_states,
+        git_author_name,
+        git_author_email,
+        git_max_entries,
+        git_diff_mode,
+        git_base_ref,
+        git_head_ref,
+        git_source_ref,
+        dry_run,
         provider_id,
         session_id,
         prompt,
@@ -684,6 +806,14 @@ fn execute_options(options: CliOptions) -> CliExecution {
         | CliCommand::MindMapHistoryUndo
         | CliCommand::MindMapHistoryRedo
         | CliCommand::Render
+        | CliCommand::GitDetect
+        | CliCommand::GitInit
+        | CliCommand::GitStatus
+        | CliCommand::GitRefresh
+        | CliCommand::GitSnapshot
+        | CliCommand::GitHistory
+        | CliCommand::GitDiff
+        | CliCommand::GitRestore
         | CliCommand::AiProviderList
         | CliCommand::AiProviderHealth
         | CliCommand::AiContextPreview
@@ -896,6 +1026,32 @@ fn command_envelope(
             Ok(service.request_desktop_ui(mindmap_ui_action_request(options)))
         }
         CliCommand::Render => Ok(service.render_cli(render_request(options)?)),
+        CliCommand::GitDetect => {
+            Ok(service.detect_git_repository_cli(options.workspace_path.clone()))
+        }
+        CliCommand::GitInit => Ok(service.init_git_repository_cli(GitInitCliRequest {
+            workspace_path: options.workspace_path.clone(),
+            confirmation_token: options.confirmation_token.clone(),
+            non_interactive: options.non_interactive,
+        })),
+        CliCommand::GitStatus => Ok(service.git_status_cli(options.workspace_path.clone())),
+        CliCommand::GitRefresh => Ok(service.git_refresh_cli(options.workspace_path.clone())),
+        CliCommand::GitSnapshot => {
+            Ok(service.create_git_snapshot_cli(git_snapshot_request(options)?))
+        }
+        CliCommand::GitHistory => Ok(service.git_history_cli(GitHistoryCliRequest {
+            workspace_path: options.workspace_path.clone(),
+            relative_path: options.relative_path.clone(),
+            max_entries: options.git_max_entries,
+        })),
+        CliCommand::GitDiff => Ok(service.git_diff_cli(GitDiffCliRequest {
+            workspace_path: options.workspace_path.clone(),
+            mode: options.git_diff_mode,
+            relative_path: options.relative_path.clone(),
+            base_ref: options.git_base_ref.clone(),
+            head_ref: options.git_head_ref.clone(),
+        })),
+        CliCommand::GitRestore => Ok(service.restore_git_file_cli(git_restore_request(options)?)),
         CliCommand::AiProviderList => Ok(service.list_ai_providers_cli()),
         CliCommand::AiProviderHealth => Ok(service.check_ai_provider_health_cli(
             AiProviderHealthCliRequest {
@@ -966,6 +1122,57 @@ fn render_request(options: &CliOptions) -> Result<RenderCliRequest, CliParseErro
         line_ending: options.line_ending,
         preservation_policy: options.preservation_policy,
     })
+}
+
+fn git_snapshot_request(options: &CliOptions) -> Result<GitSnapshotCliRequest, CliParseError> {
+    Ok(GitSnapshotCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        message: options
+            .git_message
+            .clone()
+            .ok_or_else(|| missing_flag("--message"))?,
+        scope_paths: git_scope_paths(options),
+        expected_repo_token: options.expected_repo_token.clone(),
+        expected_file_states: options.expected_file_states.clone(),
+        author: git_author(options)?,
+        confirmation_token: options.confirmation_token.clone(),
+        non_interactive: options.non_interactive,
+    })
+}
+
+fn git_restore_request(options: &CliOptions) -> Result<GitRestoreCliRequest, CliParseError> {
+    Ok(GitRestoreCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        relative_path: required_path(options)?,
+        source_ref: options
+            .git_source_ref
+            .clone()
+            .ok_or_else(|| missing_flag("--source-ref"))?,
+        expected_repo_token: options.expected_repo_token.clone(),
+        expected_file_version: options.expected_version.clone(),
+        confirmation_token: options.confirmation_token.clone(),
+        non_interactive: options.non_interactive,
+        dry_run: options.dry_run,
+    })
+}
+
+fn git_scope_paths(options: &CliOptions) -> Vec<String> {
+    if !options.git_scope_paths.is_empty() {
+        return options.git_scope_paths.clone();
+    }
+    options.relative_path.iter().cloned().collect()
+}
+
+fn git_author(options: &CliOptions) -> Result<Option<GitAuthorIdentity>, CliParseError> {
+    match (&options.git_author_name, &options.git_author_email) {
+        (None, None) => Ok(None),
+        (Some(name), Some(email)) => Ok(Some(GitAuthorIdentity {
+            name: name.clone(),
+            email: email.clone(),
+        })),
+        (Some(_), None) => Err(missing_flag("--author-email")),
+        (None, Some(_)) => Err(missing_flag("--author-name")),
+    }
 }
 
 fn ai_context_request(options: &CliOptions) -> AiContextPreviewCliRequest {
@@ -1268,6 +1475,12 @@ fn render_human_envelope_data(envelope: &CliResultEnvelope) -> String {
         | "mindmap.branch.delete"
         | "mindmap.siblings.reorder" => render_mindmap_mutation(data),
         "render" => render_export_result(data),
+        "git.detect" | "git.init" => render_git_repository_state(data),
+        "git.status" | "git.refresh" => render_git_status(data),
+        "git.snapshot" => render_git_snapshot(data),
+        "git.history" => render_git_history(data),
+        "git.diff" => render_git_diff(data),
+        "git.restore" => render_git_restore(data),
         "ai.provider.list" => render_ai_provider_list(data),
         "ai.provider.health" => render_ai_provider_health(data),
         "ai.context.preview" => render_ai_context_preview(data),
@@ -1364,6 +1577,128 @@ fn render_export_result(data: &Value) -> String {
     output
 }
 
+fn render_git_repository_state(data: &Value) -> String {
+    let mut output = format!(
+        "Git repository: {}\nRoot: {}",
+        text(data, "state"),
+        text(data, "selectedRootDisplayPath")
+    );
+    if let Some(root) = data["repositoryRootDisplayPath"].as_str() {
+        output.push_str(&format!("\nRepository root: {root}"));
+    }
+    if let Some(branch) = data["branchName"].as_str() {
+        output.push_str(&format!("\nBranch: {branch}"));
+    }
+    if let Some(head) = data["headOid"].as_str() {
+        output.push_str(&format!("\nHEAD: {}", short_ref(head)));
+    }
+    if let Some(blocked) = data["blockedReason"].as_str() {
+        output.push_str(&format!("\nBlocked: {blocked}"));
+    }
+    output
+}
+
+fn render_git_status(data: &Value) -> String {
+    let state = &data["repositoryState"];
+    let mut output = format!(
+        "Git status: {}\nChanged files: {}\nUntracked files: {}\nConflicts: {}",
+        text(state, "state"),
+        data["changedFileCount"].as_u64().unwrap_or_default(),
+        data["untrackedFileCount"].as_u64().unwrap_or_default(),
+        data["hasConflicts"].as_bool().unwrap_or(false)
+    );
+    for entry in data["entries"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "\n  {:<12} {}",
+            git_entry_change_label(entry),
+            text(entry, "relativePath")
+        ));
+        if let Some(previous) = entry["previousRelativePath"].as_str() {
+            output.push_str(&format!(" (from {previous})"));
+        }
+    }
+    output
+}
+
+fn render_git_snapshot(data: &Value) -> String {
+    format!(
+        "Created snapshot {}\nMessage: {}\nFiles: {}",
+        text(data, "shortCommitOid"),
+        text(data, "message"),
+        data["affectedFileCount"].as_u64().unwrap_or_default()
+    )
+}
+
+fn render_git_history(data: &Value) -> String {
+    let mut output = String::from("Git history:");
+    let entries = data.as_array().cloned().unwrap_or_default();
+    if entries.is_empty() {
+        output.push_str("\n  No history entries.");
+        return output;
+    }
+    for entry in entries {
+        output.push_str(&format!(
+            "\n  {}  {}  {}",
+            text(&entry, "shortCommitOid"),
+            text(&entry, "authoredAt"),
+            text(&entry, "subject")
+        ));
+    }
+    output
+}
+
+fn render_git_diff(data: &Value) -> String {
+    let mut output = format!(
+        "Git diff: {} file(s), +{}, -{}",
+        data["fileCount"].as_u64().unwrap_or_default(),
+        data["additions"].as_u64().unwrap_or_default(),
+        data["deletions"].as_u64().unwrap_or_default()
+    );
+    if data["truncation"]["isTruncated"].as_bool().unwrap_or(false) {
+        output.push_str("\nDiff truncated.");
+    }
+    for file in data["files"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "\n\ndiff {} ({})",
+            text(file, "relativePath"),
+            text(file, "change")
+        ));
+        if file["isBinary"].as_bool().unwrap_or(false) {
+            output.push_str("\n  Binary file");
+            continue;
+        }
+        for hunk in file["hunks"].as_array().into_iter().flatten() {
+            output.push_str(&format!(
+                "\n@@ -{},{} +{},{} @@ {}",
+                hunk["oldStart"].as_u64().unwrap_or_default(),
+                hunk["oldLines"].as_u64().unwrap_or_default(),
+                hunk["newStart"].as_u64().unwrap_or_default(),
+                hunk["newLines"].as_u64().unwrap_or_default(),
+                text(hunk, "sectionHeader")
+            ));
+            for line in hunk["lines"].as_array().into_iter().flatten() {
+                let prefix = match text(line, "kind") {
+                    "addition" => "+",
+                    "deletion" => "-",
+                    _ => " ",
+                };
+                output.push_str(&format!("\n{prefix}{}", text(line, "content")));
+            }
+        }
+    }
+    output
+}
+
+fn render_git_restore(data: &Value) -> String {
+    format!(
+        "Restored {} from {}\nPending change: {}\nVersion: {}",
+        text(data, "relativePath"),
+        short_ref(text(data, "restoredFrom")),
+        data["status"]["hasChanges"].as_bool().unwrap_or(false),
+        text(&data["fileVersion"], "token")
+    )
+}
+
 fn render_ai_provider_list(data: &Value) -> String {
     let mut output = String::new();
     if let Some(active) = data["activeProviderId"].as_str() {
@@ -1426,6 +1761,31 @@ fn render_ai_proposal_validation(data: &Value) -> String {
             data["validation"]["errors"].as_array().map_or(0, Vec::len)
         )
     }
+}
+
+fn git_entry_change_label(entry: &Value) -> &'static str {
+    if entry["conflicted"].as_bool().unwrap_or(false) {
+        return "conflict";
+    }
+    for key in ["staged", "unstaged"] {
+        match text(entry, key) {
+            "ignored" => return "ignored",
+            "untracked" => return "untracked",
+            "renamed" => return "renamed",
+            "copied" => return "copied",
+            "added" => return "added",
+            "deleted" => return "deleted",
+            "modified" => return "modified",
+            "unmerged" => return "unmerged",
+            "unknown" => return "unknown",
+            _ => {}
+        }
+    }
+    "unmodified"
+}
+
+fn short_ref(value: &str) -> &str {
+    value.get(..12).unwrap_or(value)
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -1513,6 +1873,14 @@ fn operation_id(command: CliCommand) -> &'static str {
         CliCommand::MindMapHistoryUndo => "mindmap.history.undo",
         CliCommand::MindMapHistoryRedo => "mindmap.history.redo",
         CliCommand::Render => "render",
+        CliCommand::GitDetect => "git.detect",
+        CliCommand::GitInit => "git.init",
+        CliCommand::GitStatus => "git.status",
+        CliCommand::GitRefresh => "git.refresh",
+        CliCommand::GitSnapshot => "git.snapshot",
+        CliCommand::GitHistory => "git.history",
+        CliCommand::GitDiff => "git.diff",
+        CliCommand::GitRestore => "git.restore",
         CliCommand::AiProviderList => "ai.provider.list",
         CliCommand::AiProviderHealth => "ai.provider.health",
         CliCommand::AiContextPreview => "ai.context.preview",
@@ -1634,6 +2002,14 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "mindmap.history.undo" => Ok(CliCommand::MindMapHistoryUndo),
         "mindmap.history.redo" => Ok(CliCommand::MindMapHistoryRedo),
         "render" | "export.render" => Ok(CliCommand::Render),
+        "git.detect" | "git.repository" => Ok(CliCommand::GitDetect),
+        "git.init" | "git.enable" => Ok(CliCommand::GitInit),
+        "git.status" => Ok(CliCommand::GitStatus),
+        "git.refresh" => Ok(CliCommand::GitRefresh),
+        "git.snapshot" | "git.commit" => Ok(CliCommand::GitSnapshot),
+        "git.history" | "git.log" => Ok(CliCommand::GitHistory),
+        "git.diff" => Ok(CliCommand::GitDiff),
+        "git.restore" => Ok(CliCommand::GitRestore),
         "ai.provider.list" | "ai.providers.list" => Ok(CliCommand::AiProviderList),
         "ai.provider.health" | "ai.provider.check" => Ok(CliCommand::AiProviderHealth),
         "ai.context.preview" | "ai.context" => Ok(CliCommand::AiContextPreview),
@@ -1700,6 +2076,18 @@ fn parse_link_kind(value: &str) -> Result<LinkKind, CliParseError> {
         _ => Err(CliParseError {
             code: CliErrorCode::InvalidArguments,
             message: format!("Unsupported link kind `{value}`."),
+        }),
+    }
+}
+
+fn parse_git_diff_mode(value: &str) -> Result<GitDiffMode, CliParseError> {
+    match value {
+        "working-tree" | "working_tree" | "worktree" => Ok(GitDiffMode::WorkingTree),
+        "staged" | "cached" => Ok(GitDiffMode::Staged),
+        "ref-range" | "ref_range" | "range" => Ok(GitDiffMode::RefRange),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported Git diff mode `{value}`."),
         }),
     }
 }
@@ -1844,6 +2232,13 @@ fn is_ai_command_context(command: Option<CliCommand>, args: &[String]) -> bool {
                 | "ai.proposal.apply"
         )
     })
+}
+
+fn is_git_file_command(command: Option<CliCommand>) -> bool {
+    matches!(
+        command,
+        Some(CliCommand::GitHistory | CliCommand::GitDiff | CliCommand::GitRestore)
+    )
 }
 
 fn required_value(args: &[String], index: usize) -> Result<&str, CliParseError> {
@@ -2056,6 +2451,67 @@ mod tests {
         assert_eq!(options.parent_id.as_deref(), Some("root"));
         assert_eq!(options.child_ids, vec!["b", "a"]);
         assert_eq!(options.position, MindMapSiblingPosition::Before);
+    }
+
+    #[test]
+    fn parses_git_snapshot_and_restore_options() {
+        let expected_version = version_json();
+        let options = parse_args(&args(&[
+            "git.snapshot",
+            "--workspace",
+            "notes",
+            "--message",
+            "Save local thought",
+            "--paths",
+            "one.md,two.md",
+            "--author-name",
+            "Test User",
+            "--author-email",
+            "test@example.com",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::GitSnapshot);
+        assert_eq!(options.git_message.as_deref(), Some("Save local thought"));
+        assert_eq!(options.git_scope_paths, vec!["one.md", "two.md"]);
+        assert_eq!(options.git_author_name.as_deref(), Some("Test User"));
+
+        let restore = parse_args(&args(&[
+            "git.restore",
+            "idea.md",
+            "--source-ref",
+            "HEAD~1",
+            "--expected-version",
+            &expected_version,
+            "--dry-run",
+        ]))
+        .unwrap();
+
+        assert_eq!(restore.command, CliCommand::GitRestore);
+        assert_eq!(restore.relative_path.as_deref(), Some("idea.md"));
+        assert_eq!(restore.git_source_ref.as_deref(), Some("HEAD~1"));
+        assert!(restore.dry_run);
+    }
+
+    #[test]
+    fn parses_git_diff_modes_and_refs() {
+        let options = parse_args(&args(&[
+            "git.diff",
+            "notes/idea.md",
+            "--diff-mode",
+            "ref-range",
+            "--base-ref",
+            "HEAD~1",
+            "--head-ref",
+            "HEAD",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::GitDiff);
+        assert_eq!(options.relative_path.as_deref(), Some("notes/idea.md"));
+        assert_eq!(options.git_diff_mode, GitDiffMode::RefRange);
+        assert_eq!(options.git_base_ref.as_deref(), Some("HEAD~1"));
+        assert_eq!(options.git_head_ref.as_deref(), Some("HEAD"));
     }
 
     #[test]
