@@ -22,6 +22,8 @@ export interface ProposalReviewPanelProps {
   onDismiss?: (review: ProposalReview) => void;
   onConfirmRiskFlag?: (riskFlag: ProposalRiskFlag, review: ProposalReview) => void;
   onClearRiskConfirmation?: (riskFlag: ProposalRiskFlag, review: ProposalReview) => void;
+  onConfirmGuardedApply?: (token: string, review: ProposalReview) => void;
+  onClearGuardedApplyConfirmation?: (review: ProposalReview) => void;
 }
 
 export function ProposalReviewPanel({
@@ -31,6 +33,8 @@ export function ProposalReviewPanel({
   onDismiss,
   onConfirmRiskFlag,
   onClearRiskConfirmation,
+  onConfirmGuardedApply,
+  onClearGuardedApplyConfirmation,
 }: ProposalReviewPanelProps) {
   const preview = useMemo(() => (review ? createProposalPreviewModel(review) : null), [review]);
 
@@ -51,6 +55,7 @@ export function ProposalReviewPanel({
   const riskFlags = review.proposal?.riskFlags.filter((riskFlag) =>
     HIGH_RISK_CONFIRMATION_FLAGS.includes(riskFlag),
   ) ?? [];
+  const guardedApplyConfirmation = preview.guardedApplyConfirmation;
 
   return (
     <section className="proposal-panel" aria-label="AI proposal review" aria-live="polite">
@@ -117,6 +122,52 @@ export function ProposalReviewPanel({
               </label>
             );
           })}
+        </fieldset>
+      ) : null}
+
+      {guardedApplyConfirmation?.required ? (
+        <fieldset className="proposal-guarded-confirmation">
+          <legend>Confirm affected files</legend>
+          <ul className="proposal-guarded-file-list">
+            {guardedApplyConfirmation.affectedFiles.map((file) => (
+              <li key={`${file.path}:${file.operationType}`}>
+                <span>{file.path}</span>
+                <small>
+                  {file.operationType} | base {file.baseVersionToken}
+                </small>
+                {file.previousPath ? <small>from {file.previousPath}</small> : null}
+                <em>{file.linkImpact}</em>
+                {file.highRiskFlags.length > 0 ? (
+                  <strong>{file.highRiskFlags.map(formatRiskFlag).join(', ')}</strong>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+          {guardedApplyConfirmation.highRiskOperations.length > 0 ? (
+            <ol className="proposal-guarded-operation-list">
+              {guardedApplyConfirmation.highRiskOperations.map((operation) => (
+                <li key={operation.operationId}>
+                  <strong>{operation.operationType}</strong>
+                  <span>{operation.filePath}</span>
+                  <p>{operation.description}</p>
+                  <small>{operation.riskFlags.map(formatRiskFlag).join(', ')}</small>
+                  {operation.linkImpact ? <em>{operation.linkImpact}</em> : null}
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          <label>
+            <input
+              type="checkbox"
+              checked={preview.isGuardedApplyConfirmed}
+              onChange={(event) =>
+                event.currentTarget.checked
+                  ? onConfirmGuardedApply?.(guardedApplyConfirmation.token, review)
+                  : onClearGuardedApplyConfirmation?.(review)
+              }
+            />
+            <span>I reviewed every affected file and high-risk operation</span>
+          </label>
         </fieldset>
       ) : null}
 

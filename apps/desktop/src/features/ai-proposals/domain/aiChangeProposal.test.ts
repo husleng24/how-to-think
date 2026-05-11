@@ -52,6 +52,21 @@ function document(path = 'notes/root.md'): ProposalDocumentSnapshot {
   };
 }
 
+function largeDeletionDocument(): ProposalDocumentSnapshot {
+  const childIds = Array.from({ length: 10 }, (_, index) => `alpha-child-${index}`);
+
+  return {
+    id: 'notes/root.md',
+    version: 7,
+    rootNodeId: 'root',
+    nodes: {
+      root: node('root', null, ['alpha'], 'Root'),
+      alpha: node('alpha', 'root', childIds, 'Alpha'),
+      ...Object.fromEntries(childIds.map((childId) => [childId, node(childId, 'alpha', [], childId)])),
+    },
+  };
+}
+
 function context(): ProposalValidationContext {
   return {
     workspaceId: 'workspace-1',
@@ -442,11 +457,12 @@ describe('proposal impact and risk summary', () => {
             newParentNodeId: 'alpha',
           },
           {
-            type: 'delete-link',
-            operationId: 'op-delete-link',
+            type: 'update-link',
+            operationId: 'op-update-link-target',
             targetFilePath: 'notes/other.md',
             sourceNodeId: 'root',
             linkId: 'link-2',
+            target: { type: 'file', filePath: 'notes/root.md' },
           },
         ],
       }),
@@ -464,9 +480,153 @@ describe('proposal impact and risk summary', () => {
         'branch_move',
         'link_change',
         'multi_file_change',
+        'link_target_change',
         'markdown_serialization_warning',
       ]),
     );
+  });
+
+  it('derives guarded risk flags for file lifecycle, cross-file moves, and large deletions', () => {
+    const created = createAiChangeProposal(
+      baseInput({
+        proposalId: 'proposal-create',
+        targetScope: {
+          type: 'multi-file',
+          filePaths: ['notes/new.md'],
+        },
+        affectedFiles: [
+          {
+            path: 'notes/new.md',
+            baseFileVersion: { token: 'new-file:notes/new.md' },
+            changeKind: 'create',
+            markdownSerialization: {
+              status: 'valid',
+              markdown: '# New\n',
+              diagnostics: [],
+            },
+          },
+        ],
+        operations: [
+          {
+            type: 'add-node',
+            operationId: 'op-add-new',
+            targetFilePath: 'notes/new.md',
+            parentNodeId: 'root',
+            nodeId: 'new-child',
+            text: 'New child',
+          },
+        ],
+      }),
+      context(),
+    );
+    expect(created.ok).toBe(true);
+    if (created.ok) {
+      expect(created.proposal.riskFlags).toEqual(expect.arrayContaining(['file_creation']));
+    }
+
+    const moved = createAiChangeProposal(
+      baseInput({
+        proposalId: 'proposal-cross-file-move',
+        targetScope: {
+          type: 'multi-file',
+          filePaths: ['notes/root.md', 'notes/other.md'],
+        },
+        affectedFiles: [
+          {
+            path: 'notes/root.md',
+            baseFileVersion: fileVersion,
+            changeKind: 'modify',
+          },
+          {
+            path: 'notes/other.md',
+            baseFileVersion: otherFileVersion,
+            changeKind: 'modify',
+          },
+        ],
+        operations: [
+          {
+            type: 'delete-node',
+            operationId: 'op-delete-alpha-child',
+            targetFilePath: 'notes/root.md',
+            nodeId: 'alpha-child',
+          },
+          {
+            type: 'add-node',
+            operationId: 'op-add-other-gamma',
+            targetFilePath: 'notes/other.md',
+            parentNodeId: 'root',
+            nodeId: 'gamma',
+            text: 'Gamma',
+          },
+        ],
+      }),
+      context(),
+    );
+    expect(moved.ok).toBe(true);
+    if (moved.ok) {
+      expect(moved.proposal.riskFlags).toEqual(
+        expect.arrayContaining(['cross_file_move', 'multi_file_change']),
+      );
+    }
+
+    const deletedFile = createAiChangeProposal(
+      baseInput({
+        proposalId: 'proposal-delete-file',
+        targetScope: {
+          type: 'multi-file',
+          filePaths: ['notes/other.md'],
+        },
+        affectedFiles: [
+          {
+            path: 'notes/other.md',
+            baseFileVersion: otherFileVersion,
+            changeKind: 'delete',
+          },
+        ],
+        operations: [
+          {
+            type: 'delete-node',
+            operationId: 'op-delete-other-alpha-child',
+            targetFilePath: 'notes/other.md',
+            nodeId: 'alpha-child',
+          },
+        ],
+      }),
+      context(),
+    );
+    expect(deletedFile.ok).toBe(true);
+    if (deletedFile.ok) {
+      expect(deletedFile.proposal.riskFlags).toEqual(expect.arrayContaining(['file_deletion']));
+    }
+
+    const largeContext = context();
+    largeContext.knownFiles[0] = {
+      ...largeContext.knownFiles[0],
+      document: largeDeletionDocument(),
+    };
+    const largeDeletion = createAiChangeProposal(
+      baseInput({
+        proposalId: 'proposal-large-delete',
+        targetScope: {
+          type: 'branch',
+          filePath: 'notes/root.md',
+          rootNodeId: 'alpha',
+        },
+        operations: [
+          {
+            type: 'delete-node',
+            operationId: 'op-delete-alpha-large',
+            targetFilePath: 'notes/root.md',
+            nodeId: 'alpha',
+          },
+        ],
+      }),
+      largeContext,
+    );
+    expect(largeDeletion.ok).toBe(true);
+    if (largeDeletion.ok) {
+      expect(largeDeletion.proposal.riskFlags).toEqual(expect.arrayContaining(['large_deletion']));
+    }
   });
 });
 

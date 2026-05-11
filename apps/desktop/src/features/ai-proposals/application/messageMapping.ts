@@ -4,6 +4,7 @@ import type {
   ProposalValidationError,
   ProposalValidationErrorCode,
 } from '../domain/types';
+import { isGuardedApplyConfirmed } from './guardedApplyConfirmation';
 import type {
   ProposalReview,
   ProposalReviewEditorSnapshot,
@@ -15,6 +16,11 @@ export const HIGH_RISK_CONFIRMATION_FLAGS: ProposalRiskFlag[] = [
   'node_deletion',
   'branch_move',
   'multi_file_change',
+  'file_creation',
+  'file_deletion',
+  'cross_file_move',
+  'link_target_change',
+  'large_deletion',
   'markdown_serialization_warning',
 ];
 
@@ -97,6 +103,10 @@ const validationMessageCopy: Partial<
     title: 'Unknown file',
     detail: 'The target file is not part of the workspace context captured for AI.',
   },
+  file_already_exists: {
+    title: 'File already exists',
+    detail: 'Created files must not overwrite an existing Markdown file.',
+  },
   unknown_target: {
     title: 'Unknown target',
     detail: 'The proposal target no longer matches the active review context.',
@@ -156,9 +166,29 @@ const riskMessageCopy: Record<ProposalRiskFlag, { title: string; detail: string 
     title: 'Multi-file warning',
     detail: 'This proposal affects more than one Markdown file. Confirm the scope before accepting.',
   },
+  file_creation: {
+    title: 'File creation warning',
+    detail: 'This proposal creates one or more Markdown files. Confirm the new paths before accepting.',
+  },
+  file_deletion: {
+    title: 'File deletion warning',
+    detail: 'This proposal deletes one or more Markdown files. Confirm the deletion before accepting.',
+  },
+  cross_file_move: {
+    title: 'Cross-file move warning',
+    detail: 'This proposal moves content across Markdown files. Confirm every source and target before accepting.',
+  },
+  link_target_change: {
+    title: 'Link target warning',
+    detail: 'This proposal changes link targets. Confirm the link impact before accepting.',
+  },
   large_change: {
     title: 'Large change',
     detail: 'This proposal changes enough nodes or files to deserve extra review.',
+  },
+  large_deletion: {
+    title: 'Large deletion warning',
+    detail: 'This proposal deletes a large number of nodes. Confirm the deleted content before accepting.',
   },
   markdown_serialization_warning: {
     title: 'Markdown serialization warning',
@@ -221,15 +251,22 @@ export function getAcceptDisabledMessages(review: ProposalReview): ProposalRevie
   }
 
   const unconfirmedRiskFlags = getUnconfirmedRiskFlags(review);
-  if (unconfirmedRiskFlags.length === 0) {
-    return [];
-  }
-
-  return unconfirmedRiskFlags.map((riskFlag) => ({
+  const messages: ProposalReviewMessage[] = unconfirmedRiskFlags.map((riskFlag) => ({
     ...mapRiskFlagToMessage(riskFlag),
-    code: 'proposal_high_risk_unconfirmed',
+    code: 'proposal_high_risk_unconfirmed' as const,
     title: 'Confirmation required',
   }));
+
+  if (!isGuardedApplyConfirmed(review)) {
+    messages.push({
+      code: 'proposal_guarded_confirmation_required',
+      title: 'Guarded apply confirmation required',
+      detail: 'Review and confirm the affected file list before accepting this proposal.',
+      severity: 'warning',
+    });
+  }
+
+  return messages;
 }
 
 export function canAcceptProposalReview(review: ProposalReview): boolean {

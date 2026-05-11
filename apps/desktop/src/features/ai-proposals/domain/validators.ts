@@ -35,9 +35,16 @@ export function validateAiChangeProposalInput(
 ): ProposalValidationResult {
   const errors: ProposalValidationError[] = [];
   const knownFilesByPath = indexKnownFiles(context.knownFiles);
+  const affectedFileChangeKindsByPath = indexAffectedFileChangeKinds(input.affectedFiles);
   const documentsByPath = indexDocuments(context.knownFiles);
   const affectedFilePaths = validateAffectedFiles(input.affectedFiles, knownFilesByPath, errors);
-  const targetScopePaths = validateTargetScope(input.targetScope, context, knownFilesByPath, errors);
+  const targetScopePaths = validateTargetScope(
+    input.targetScope,
+    context,
+    knownFilesByPath,
+    affectedFileChangeKindsByPath,
+    errors,
+  );
   const operations = validateOperations(
     input.operations,
     input.targetScope,
@@ -130,11 +137,22 @@ function validateAffectedFiles(
 
     affectedFilePaths.add(file.path);
     const knownFile = knownFilesByPath.get(file.path);
-    if (!knownFile) {
+    const isCreate = file.changeKind === 'create';
+    if (!knownFile && !isCreate) {
       errors.push(
         error(
           'unknown_file_path',
           'Affected file is not part of the selected workspace file index.',
+          `${field}.path`,
+          { filePath: file.path },
+        ),
+      );
+    }
+    if (knownFile && isCreate) {
+      errors.push(
+        error(
+          'file_already_exists',
+          'Created files must not already exist in the selected workspace file index.',
           `${field}.path`,
           { filePath: file.path },
         ),
@@ -150,7 +168,7 @@ function validateAffectedFiles(
           { filePath: file.path },
         ),
       );
-    } else if (knownFile && !fileVersionsEqual(file.baseFileVersion, knownFile.version)) {
+    } else if (!isCreate && knownFile && !fileVersionsEqual(file.baseFileVersion, knownFile.version)) {
       errors.push(
         error(
           'unresolved_base_file_version',
@@ -184,6 +202,7 @@ function validateTargetScope(
   targetScope: ProposalTargetScope | undefined,
   context: ProposalValidationContext,
   knownFilesByPath: Map<WorkspaceRelativePath, ProposalKnownFile>,
+  affectedFileChangeKindsByPath: Map<WorkspaceRelativePath, ProposalAffectedFile['changeKind']>,
   errors: ProposalValidationError[],
 ): Set<WorkspaceRelativePath> {
   const targetScopePaths = new Set<WorkspaceRelativePath>();
@@ -207,12 +226,24 @@ function validateTargetScope(
 
   switch (targetScope.type) {
     case 'node':
-      validateScopedFilePath(targetScope.filePath, 'targetScope.filePath', knownFilesByPath, errors);
+      validateScopedFilePath(
+        targetScope.filePath,
+        'targetScope.filePath',
+        knownFilesByPath,
+        affectedFileChangeKindsByPath,
+        errors,
+      );
       targetScopePaths.add(targetScope.filePath);
       validateNodeExists(targetScope.filePath, targetScope.nodeId, context, 'targetScope.nodeId', errors);
       break;
     case 'branch':
-      validateScopedFilePath(targetScope.filePath, 'targetScope.filePath', knownFilesByPath, errors);
+      validateScopedFilePath(
+        targetScope.filePath,
+        'targetScope.filePath',
+        knownFilesByPath,
+        affectedFileChangeKindsByPath,
+        errors,
+      );
       targetScopePaths.add(targetScope.filePath);
       validateNodeExists(
         targetScope.filePath,
@@ -223,7 +254,13 @@ function validateTargetScope(
       );
       break;
     case 'current-file':
-      validateScopedFilePath(targetScope.filePath, 'targetScope.filePath', knownFilesByPath, errors);
+      validateScopedFilePath(
+        targetScope.filePath,
+        'targetScope.filePath',
+        knownFilesByPath,
+        affectedFileChangeKindsByPath,
+        errors,
+      );
       targetScopePaths.add(targetScope.filePath);
       if (targetScope.filePath !== context.activeFilePath) {
         errors.push(
@@ -248,7 +285,13 @@ function validateTargetScope(
         break;
       }
       for (const [index, filePath] of targetScope.filePaths.entries()) {
-        validateScopedFilePath(filePath, `targetScope.filePaths.${index}`, knownFilesByPath, errors);
+        validateScopedFilePath(
+          filePath,
+          `targetScope.filePaths.${index}`,
+          knownFilesByPath,
+          affectedFileChangeKindsByPath,
+          errors,
+        );
         targetScopePaths.add(filePath);
       }
       break;
@@ -974,6 +1017,7 @@ function validateScopedFilePath(
   filePath: WorkspaceRelativePath,
   field: string,
   knownFilesByPath: Map<WorkspaceRelativePath, ProposalKnownFile>,
+  affectedFileChangeKindsByPath: Map<WorkspaceRelativePath, ProposalAffectedFile['changeKind']>,
   errors: ProposalValidationError[],
 ): void {
   const validation = validateWorkspaceRelativeMarkdownPath(filePath);
@@ -982,7 +1026,7 @@ function validateScopedFilePath(
     return;
   }
 
-  if (!knownFilesByPath.has(filePath)) {
+  if (!knownFilesByPath.has(filePath) && affectedFileChangeKindsByPath.get(filePath) !== 'create') {
     errors.push(
       error(
         'unknown_file_path',
@@ -1103,6 +1147,12 @@ function indexKnownFiles(
   knownFiles: ProposalKnownFile[],
 ): Map<WorkspaceRelativePath, ProposalKnownFile> {
   return new Map(knownFiles.map((file) => [file.path, file]));
+}
+
+function indexAffectedFileChangeKinds(
+  affectedFiles: ProposalAffectedFile[] | undefined,
+): Map<WorkspaceRelativePath, ProposalAffectedFile['changeKind']> {
+  return new Map((affectedFiles ?? []).map((file) => [file.path, file.changeKind]));
 }
 
 function indexDocuments(

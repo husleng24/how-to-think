@@ -12,6 +12,7 @@ import type {
 
 const LARGE_NODE_CHANGE_THRESHOLD = 20;
 const LARGE_FILE_CHANGE_THRESHOLD = 5;
+const LARGE_DELETION_THRESHOLD = 10;
 
 export function calculateProposalImpactSummary(
   operations: ProposalOperation[],
@@ -87,6 +88,7 @@ export function calculateProposalImpactSummary(
 export function detectProposalRiskFlags(
   impactSummary: ProposalImpactSummary,
   affectedFiles: ProposalAffectedFile[],
+  operations: ProposalOperation[] = [],
 ): ProposalRiskFlag[] {
   const flags = new Set<ProposalRiskFlag>();
   const changedNodeCount =
@@ -106,17 +108,71 @@ export function detectProposalRiskFlags(
   if (impactSummary.includesMultiFileChange) {
     flags.add('multi_file_change');
   }
+  if (affectedFiles.some((file) => file.changeKind === 'create')) {
+    flags.add('file_creation');
+  }
+  if (affectedFiles.some((file) => file.changeKind === 'delete')) {
+    flags.add('file_deletion');
+  }
+  if (detectCrossFileMove(operations)) {
+    flags.add('cross_file_move');
+  }
+  if (operations.some(isLinkTargetChangeOperation)) {
+    flags.add('link_target_change');
+  }
   if (
     changedNodeCount >= LARGE_NODE_CHANGE_THRESHOLD ||
     impactSummary.counts.affectedFiles >= LARGE_FILE_CHANGE_THRESHOLD
   ) {
     flags.add('large_change');
   }
+  if (impactSummary.counts.deletedNodes >= LARGE_DELETION_THRESHOLD) {
+    flags.add('large_deletion');
+  }
   if (affectedFiles.some((file) => (file.markdownSerialization?.diagnostics.length ?? 0) > 0)) {
     flags.add('markdown_serialization_warning');
   }
 
   return [...flags];
+}
+
+function detectCrossFileMove(operations: ProposalOperation[]): boolean {
+  const filePaths = new Set(operations.map((operation) => operation.targetFilePath));
+  if (filePaths.size < 2) {
+    return false;
+  }
+
+  if (operations.some((operation) => operation.type === 'move-branch')) {
+    return true;
+  }
+
+  const addedFilePaths = new Set(
+    operations
+      .filter((operation) => operation.type === 'add-node')
+      .map((operation) => operation.targetFilePath),
+  );
+  const deletedFilePaths = new Set(
+    operations
+      .filter((operation) => operation.type === 'delete-node')
+      .map((operation) => operation.targetFilePath),
+  );
+
+  for (const deletedFilePath of deletedFilePaths) {
+    for (const addedFilePath of addedFilePaths) {
+      if (deletedFilePath !== addedFilePath) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+function isLinkTargetChangeOperation(operation: ProposalOperation): boolean {
+  return (
+    (operation.type === 'add-link' && Boolean(operation.target)) ||
+    (operation.type === 'update-link' && Boolean(operation.target))
+  );
 }
 
 function indexDocumentsByPath(

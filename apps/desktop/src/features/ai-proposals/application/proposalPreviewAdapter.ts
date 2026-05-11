@@ -5,7 +5,11 @@ import type {
   ProposalTargetScope,
 } from '../domain/types';
 import { getAcceptDisabledMessages, getUnconfirmedRiskFlags } from './messageMapping';
-import type { ProposalReview, ProposalReviewMessage } from './types';
+import type {
+  ProposalGuardedApplyConfirmation,
+  ProposalReview,
+  ProposalReviewMessage,
+} from './types';
 
 export interface ProposalPreviewOperation {
   operationId: string;
@@ -37,6 +41,8 @@ export interface ProposalPreviewModel {
   messages: ProposalReviewMessage[];
   acceptDisabledMessages: ProposalReviewMessage[];
   unconfirmedRiskFlags: string[];
+  guardedApplyConfirmation?: ProposalGuardedApplyConfirmation;
+  isGuardedApplyConfirmed: boolean;
   canAccept: boolean;
   hasPartialAcceptance: false;
   rawDraftContent?: string;
@@ -68,6 +74,10 @@ export function createProposalPreviewModel(review: ProposalReview): ProposalPrev
     messages: review.messages,
     acceptDisabledMessages: getAcceptDisabledMessages(review),
     unconfirmedRiskFlags: getUnconfirmedRiskFlags(review),
+    guardedApplyConfirmation: review.guardedApplyConfirmation,
+    isGuardedApplyConfirmed:
+      !review.guardedApplyConfirmation?.required ||
+      review.confirmedGuardedApplyToken === review.guardedApplyConfirmation.token,
     canAccept: getAcceptDisabledMessages(review).length === 0,
     hasPartialAcceptance: false,
     rawDraftContent: review.draftSource?.rawAssistantContent,

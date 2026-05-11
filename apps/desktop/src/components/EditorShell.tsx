@@ -445,6 +445,12 @@ export function EditorShell({
             onClearRiskConfirmation={(riskFlag, review) =>
               proposalReviewStore.clearRiskConfirmation(riskFlag, review.reviewId)
             }
+            onConfirmGuardedApply={(token, review) =>
+              proposalReviewStore.confirmGuardedApply(token, review.reviewId)
+            }
+            onClearGuardedApplyConfirmation={(review) =>
+              proposalReviewStore.clearGuardedApplyConfirmation(review.reviewId)
+            }
           />
         </aside>
       </div>

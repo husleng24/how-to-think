@@ -1,8 +1,10 @@
 import type {
   AiChangeProposal,
   IsoDateTimeString,
+  ProposalAffectedFile,
   ProposalFileVersionAnchor,
   ProposalId,
+  ProposalOperation,
   ProposalRiskFlag,
   ProposalValidationError,
   WorkspaceRelativePath,
@@ -33,12 +35,18 @@ export type ProposalReviewMessageCode =
   | 'proposal_stale_document'
   | 'proposal_stale_file'
   | 'proposal_high_risk_unconfirmed'
+  | 'proposal_guarded_confirmation_required'
   | 'proposal_not_ready'
   | 'node_deletion'
   | 'branch_move'
   | 'link_change'
   | 'multi_file_change'
+  | 'file_creation'
+  | 'file_deletion'
+  | 'cross_file_move'
+  | 'link_target_change'
   | 'large_change'
+  | 'large_deletion'
   | 'markdown_serialization_warning'
   | ProposalValidationError['code'];
 
@@ -64,6 +72,33 @@ export interface ProposalReviewEditorSnapshot {
   undoHistory: unknown;
   selection: unknown;
   capturedAt: IsoDateTimeString;
+}
+
+export interface ProposalGuardedAffectedFileSummary {
+  path: WorkspaceRelativePath;
+  operationType: ProposalAffectedFile['changeKind'];
+  baseVersionToken: string;
+  previousPath?: WorkspaceRelativePath;
+  linkImpact: string;
+  highRiskFlags: ProposalRiskFlag[];
+}
+
+export interface ProposalGuardedHighRiskOperationSummary {
+  operationId: string;
+  operationType: ProposalOperation['type'] | 'create-file' | 'delete-file' | 'rename-file';
+  filePath: WorkspaceRelativePath;
+  description: string;
+  riskFlags: ProposalRiskFlag[];
+  linkImpact?: string;
+}
+
+export interface ProposalGuardedApplyConfirmation {
+  required: boolean;
+  token: string;
+  affectedFiles: ProposalGuardedAffectedFileSummary[];
+  highRiskOperations: ProposalGuardedHighRiskOperationSummary[];
+  riskFlags: ProposalRiskFlag[];
+  linkImpactSummary: string;
 }
 
 export interface InvalidProposalReviewSource {
@@ -101,6 +136,8 @@ export interface ProposalReview {
   editorSnapshot: ProposalReviewEditorSnapshot;
   messages: ProposalReviewMessage[];
   confirmedRiskFlags: ProposalRiskFlag[];
+  guardedApplyConfirmation?: ProposalGuardedApplyConfirmation;
+  confirmedGuardedApplyToken?: string;
   decision?: {
     type: 'accept-proposal' | 'reject-proposal';
     decidedAt: IsoDateTimeString;
@@ -127,6 +164,8 @@ export type ProposalReviewChangeType =
   | 'mark-conflict'
   | 'confirm-risk'
   | 'clear-risk-confirmation'
+  | 'confirm-guarded-apply'
+  | 'clear-guarded-apply-confirmation'
   | 'reject'
   | 'begin-apply'
   | 'mark-applied'
@@ -160,6 +199,8 @@ export interface ProposalReviewStore {
   markConflict(messages?: ProposalReviewMessage[], reviewId?: string): ProposalReview | null;
   confirmRiskFlag(riskFlag: ProposalRiskFlag, reviewId?: string): ProposalReview | null;
   clearRiskConfirmation(riskFlag: ProposalRiskFlag, reviewId?: string): ProposalReview | null;
+  confirmGuardedApply(token: string, reviewId?: string): ProposalReview | null;
+  clearGuardedApplyConfirmation(reviewId?: string): ProposalReview | null;
   rejectActive(reason?: string): ProposalReview | null;
   beginApply(reviewId?: string): ProposalReview | null;
   markApplied(reviewId?: string): ProposalReview | null;

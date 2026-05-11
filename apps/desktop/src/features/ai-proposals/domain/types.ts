@@ -164,7 +164,12 @@ export type ProposalRiskFlag =
   | 'branch_move'
   | 'link_change'
   | 'multi_file_change'
+  | 'file_creation'
+  | 'file_deletion'
+  | 'cross_file_move'
+  | 'link_target_change'
   | 'large_change'
+  | 'large_deletion'
   | 'markdown_serialization_warning';
 
 export interface ProposalImpactSummary {
@@ -210,6 +215,7 @@ export type ProposalValidationErrorCode =
   | 'unsupported_file_type'
   | 'out_of_workspace_file'
   | 'unknown_file_path'
+  | 'file_already_exists'
   | 'unknown_target'
   | 'unknown_node_id'
   | 'operation_outside_target_scope'

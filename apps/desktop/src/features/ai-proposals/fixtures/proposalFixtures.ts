@@ -24,6 +24,12 @@ export const proposalFixtureOtherFileVersion: ProposalFileVersionAnchor = {
   byteSize: 72,
   contentHash: 'other-hash',
 };
+export const proposalFixtureNewFileVersion: ProposalFileVersionAnchor = {
+  token: 'new-file:notes/new.md',
+  modifiedAt: proposalFixtureCreatedAt,
+  byteSize: 0,
+  contentHash: 'new-file',
+};
 
 export function createProposalFixtureDocument(path = 'notes/root.md'): ProposalDocumentSnapshot {
   return {
@@ -243,6 +249,107 @@ export function createMultiFileProposalFixture(): AiChangeProposal {
         },
       ],
       summary: 'Revise related notes across two files.',
+    }),
+  );
+}
+
+export function createFileCreationProposalFixture(): AiChangeProposal {
+  return buildProposal(
+    baseInput({
+      proposalId: 'proposal-create-file',
+      targetScope: {
+        type: 'multi-file',
+        filePaths: ['notes/new.md'],
+      },
+      affectedFiles: [
+        {
+          path: 'notes/new.md',
+          baseFileVersion: proposalFixtureNewFileVersion,
+          changeKind: 'create',
+          markdownSerialization: {
+            status: 'valid',
+            markdown: '# New\n\n## First thought\n',
+            diagnostics: [],
+          },
+        },
+      ],
+      operations: [
+        {
+          type: 'add-node',
+          operationId: 'op-create-new-alpha',
+          targetFilePath: 'notes/new.md',
+          parentNodeId: 'root',
+          nodeId: 'alpha',
+          text: 'First thought',
+        },
+      ],
+      summary: 'Create a related note.',
+    }),
+  );
+}
+
+export function createFileDeletionProposalFixture(): AiChangeProposal {
+  return buildProposal(
+    baseInput({
+      proposalId: 'proposal-delete-file',
+      targetScope: {
+        type: 'multi-file',
+        filePaths: ['notes/other.md'],
+      },
+      affectedFiles: [
+        {
+          path: 'notes/other.md',
+          baseFileVersion: proposalFixtureOtherFileVersion,
+          changeKind: 'delete',
+        },
+      ],
+      operations: [
+        {
+          type: 'delete-node',
+          operationId: 'op-delete-other-alpha-child',
+          targetFilePath: 'notes/other.md',
+          nodeId: 'alpha-child',
+        },
+      ],
+      summary: 'Delete an obsolete related note.',
+    }),
+  );
+}
+
+export function createLinkTargetChangeProposalFixture(): AiChangeProposal {
+  return buildProposal(
+    baseInput({
+      proposalId: 'proposal-link-target',
+      targetScope: {
+        type: 'current-file',
+        filePath: 'notes/root.md',
+      },
+      affectedFiles: [
+        {
+          path: 'notes/root.md',
+          baseFileVersion: proposalFixtureFileVersion,
+          changeKind: 'modify',
+          markdownSerialization: {
+            status: 'valid',
+            markdown: '# Root\n\n## Alpha\n\n### Alpha child\n\n## Beta\n\n[Other](other.md)\n',
+            diagnostics: [],
+          },
+        },
+      ],
+      operations: [
+        {
+          type: 'update-link',
+          operationId: 'op-update-link-target',
+          targetFilePath: 'notes/root.md',
+          sourceNodeId: 'root',
+          linkId: 'link-other',
+          target: {
+            type: 'file',
+            filePath: 'notes/other.md',
+          },
+        },
+      ],
+      summary: 'Retarget a Markdown link.',
     }),
   );
 }

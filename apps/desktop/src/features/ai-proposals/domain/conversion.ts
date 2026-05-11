@@ -33,7 +33,7 @@ export function createAiChangeProposal(
     baseDocumentVersion: input.baseDocumentVersion as number,
     affectedFiles,
     operations,
-    riskFlags: detectProposalRiskFlags(impactSummary, affectedFiles),
+    riskFlags: detectProposalRiskFlags(impactSummary, affectedFiles, operations),
     validationStatus: 'valid',
     validationErrors: [],
     impactSummary,

@@ -12,6 +12,7 @@ import {
   createStatusMessage,
   mapValidationErrorsToMessages,
 } from './messageMapping';
+import { buildGuardedApplyConfirmation } from './guardedApplyConfirmation';
 import type {
   InvalidProposalReviewSource,
   ProposalReview,
@@ -58,6 +59,7 @@ export function createProposalReview(
     editorSnapshot,
     messages: status === 'conflict' ? conflictMessages : createReadyMessages(proposal),
     confirmedRiskFlags: [],
+    guardedApplyConfirmation: buildGuardedApplyConfirmation(proposal),
   };
 }
 
@@ -237,6 +239,35 @@ export function clearProposalRiskConfirmation(
   return updateReview(review, {
     updatedAt: now.toISOString(),
     confirmedRiskFlags: review.confirmedRiskFlags.filter((confirmedFlag) => confirmedFlag !== riskFlag),
+  });
+}
+
+export function confirmGuardedApplyConfirmation(
+  review: ProposalReview,
+  token: string,
+  now: Date = new Date(),
+): ProposalReview {
+  if (!review.guardedApplyConfirmation?.required || review.confirmedGuardedApplyToken === token) {
+    return review;
+  }
+
+  return updateReview(review, {
+    updatedAt: now.toISOString(),
+    confirmedGuardedApplyToken: token,
+  });
+}
+
+export function clearGuardedApplyReviewConfirmation(
+  review: ProposalReview,
+  now: Date = new Date(),
+): ProposalReview {
+  if (!review.confirmedGuardedApplyToken) {
+    return review;
+  }
+
+  return updateReview(review, {
+    updatedAt: now.toISOString(),
+    confirmedGuardedApplyToken: undefined,
   });
 }
 
@@ -480,6 +511,22 @@ export function createProposalReviewStore(
       return updateActive(
         'clear-risk-confirmation',
         (review) => clearProposalRiskConfirmation(review, riskFlag),
+        reviewId,
+      );
+    },
+
+    confirmGuardedApply(token, reviewId) {
+      return updateActive(
+        'confirm-guarded-apply',
+        (review) => confirmGuardedApplyConfirmation(review, token),
+        reviewId,
+      );
+    },
+
+    clearGuardedApplyConfirmation(reviewId) {
+      return updateActive(
+        'clear-guarded-apply-confirmation',
+        clearGuardedApplyReviewConfirmation,
         reviewId,
       );
     },

@@ -713,6 +713,79 @@ button {
   text-transform: capitalize;
 }
 
+.proposal-guarded-confirmation {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #b8c7c6;
+  border-radius: 8px;
+  background: #f5fbf9;
+}
+
+.proposal-guarded-confirmation legend {
+  padding: 0 4px;
+  color: #365f63;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.proposal-guarded-confirmation label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #243f42;
+  font-size: 0.84rem;
+}
+
+.proposal-guarded-file-list,
+.proposal-guarded-operation-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.proposal-guarded-file-list li,
+.proposal-guarded-operation-list li {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid #cbd8d6;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.proposal-guarded-file-list span,
+.proposal-guarded-operation-list strong {
+  overflow-wrap: anywhere;
+  color: #202225;
+  font-weight: 800;
+}
+
+.proposal-guarded-file-list small,
+.proposal-guarded-operation-list small,
+.proposal-guarded-file-list em,
+.proposal-guarded-operation-list em {
+  overflow-wrap: anywhere;
+  color: #4e686b;
+  font-size: 0.76rem;
+  font-style: normal;
+  line-height: 1.35;
+}
+
+.proposal-guarded-file-list strong,
+.proposal-guarded-operation-list span,
+.proposal-guarded-operation-list p {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #37585c;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .proposal-impact-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }

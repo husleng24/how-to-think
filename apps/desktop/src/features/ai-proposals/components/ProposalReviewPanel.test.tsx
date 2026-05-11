@@ -66,21 +66,39 @@ describe('ProposalReviewPanel', () => {
   });
 
   it('renders multi-file scope, affected files, and Markdown previews', () => {
+    const onConfirmGuardedApply = vi.fn();
     const review = createProposalReview(
       createMultiFileProposalFixture(),
       createProposalReviewEditorSnapshot(),
     );
-    render(<ProposalReviewPanel review={review} />);
+    render(<ProposalReviewPanel review={review} onConfirmGuardedApply={onConfirmGuardedApply} />);
 
     expect(screen.getByText('Multiple files (2)')).toBeVisible();
     expect(screen.getByText('Multi-file warning')).toBeVisible();
+    expect(screen.getByText('Confirm affected files')).toBeVisible();
 
     const affectedFiles = screen.getByRole('region', { name: /affected files/i });
     expect(within(affectedFiles).getByText('notes/root.md')).toBeVisible();
     expect(within(affectedFiles).getByText('notes/other.md')).toBeVisible();
+    const guardedConfirmation = screen.getByRole('group', { name: /confirm affected files/i });
+    expect(within(guardedConfirmation).getByText(/base version:notes\/root\.md:7/i)).toBeVisible();
+    expect(
+      within(guardedConfirmation).getByRole('checkbox', {
+        name: /reviewed every affected file/i,
+      }),
+    ).toBeInTheDocument();
 
     expect(screen.getByLabelText('Before notes/root.md')).toHaveTextContent('Alpha');
     expect(screen.getByLabelText('After notes/other.md')).toHaveTextContent('Beta revised');
     expect(screen.getByRole('button', { name: /accept whole proposal/i })).toBeDisabled();
+    fireEvent.click(
+      within(guardedConfirmation).getByRole('checkbox', {
+        name: /reviewed every affected file/i,
+      }),
+    );
+    expect(onConfirmGuardedApply).toHaveBeenCalledWith(
+      review.guardedApplyConfirmation?.token,
+      review,
+    );
   });
 });

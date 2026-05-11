@@ -58,6 +58,26 @@ describe('proposal review lifecycle', () => {
     expect(canAcceptProposalReview(confirmedDeletionReview)).toBe(true);
     expect(beginApplyingProposalReview(confirmedDeletionReview).status).toBe('applying');
 
+    const multiFileReview = createProposalReview(
+      createMultiFileProposalFixture(),
+      createProposalReviewEditorSnapshot(),
+    );
+    const multiFileStore = createProposalReviewStore({ activeReview: multiFileReview });
+    multiFileStore.confirmRiskFlag('multi_file_change');
+    expect(canAcceptProposalReview(multiFileStore.getState().activeReview as typeof multiFileReview)).toBe(
+      false,
+    );
+    const token = multiFileReview.guardedApplyConfirmation?.token;
+    expect(token).toBeDefined();
+    multiFileStore.confirmGuardedApply(token as string);
+    expect(canAcceptProposalReview(multiFileStore.getState().activeReview as typeof multiFileReview)).toBe(
+      true,
+    );
+    multiFileStore.clearGuardedApplyConfirmation();
+    expect(canAcceptProposalReview(multiFileStore.getState().activeReview as typeof multiFileReview)).toBe(
+      false,
+    );
+
     const staleReview = createStaleProposalReviewFixture();
     expect(staleReview.status).toBe('conflict');
     expect(canAcceptProposalReview(staleReview)).toBe(false);
