@@ -71,4 +71,6 @@ For local-first workspace lifecycle verification, follow `apps/desktop/docs/loca
 
 For local AI assistant provider setup, context/privacy behavior, mock-provider validation, and manual Codex/Claude QA, follow `apps/desktop/docs/ai-assistant-operator-guide.md`.
 
+For deterministic AI proposal review/apply regression coverage and manual safety checks, follow `apps/desktop/docs/ai-proposal-review-apply-verification.md`.
+
 The scaffold is intentionally isolated under `apps/desktop/` so future `packages/*` and `crates/*` work can be added without coupling to the initial shell.

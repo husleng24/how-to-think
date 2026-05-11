@@ -13,3 +13,4 @@ export * from './domain/pathSafety';
 export * from './domain/types';
 export * from './domain/validators';
 export * from './fixtures/proposalFixtures';
+export * from './fixtures/regressionScenarios';
