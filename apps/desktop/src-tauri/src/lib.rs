@@ -9,6 +9,7 @@ pub mod documents;
 pub mod errors;
 pub mod file_index;
 pub mod fs_watch;
+pub mod git_contracts;
 pub mod links;
 pub mod markdown_lifecycle;
 pub mod models;
