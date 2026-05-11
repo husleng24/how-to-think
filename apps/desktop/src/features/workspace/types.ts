@@ -2,9 +2,12 @@ import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mind
 import type {
   GitBlockedState,
   GitOperationError,
+  GitRepositoryState,
   GitRepositoryStateToken,
   GitRestoreRequest,
   GitRestoreResult,
+  GitSnapshotRequest,
+  GitSnapshotResult,
   GitStatusSummary,
 } from '../git-service';
 import type {
@@ -230,6 +233,8 @@ export interface WorkspaceCommands {
   createWorkspaceAtPath(path: string): Promise<WorkspaceSession>;
   refreshWorkspaceFiles(workspaceId: WorkspaceId): Promise<WorkspaceFile[]>;
   refreshGitState(workspaceId: WorkspaceId): Promise<GitStatusSummary>;
+  initializeGitRepository(workspaceId: WorkspaceId): Promise<GitRepositoryState>;
+  createGitSnapshot(input: GitSnapshotRequest): Promise<GitSnapshotResult>;
   startWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
   refreshWorkspaceExternalChanges(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
   stopWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<void>;
@@ -278,3 +283,7 @@ export interface RestoreActiveFromGitInput {
 }
 
 export type GitOperationFailure = GitOperationError;
+
+export type GitSnapshotActionResult =
+  | { ok: true; result: GitSnapshotResult }
+  | { ok: false; error: unknown };

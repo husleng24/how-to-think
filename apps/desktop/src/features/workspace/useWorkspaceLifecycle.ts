@@ -3,7 +3,11 @@ import { useCallback, useEffect, useMemo, useReducer, useRef } from 'react';
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import { mergeEditorDocumentIntoMarkdownDocument } from '../../services/markdownLifecycle';
 import type { SaveReason, WorkspaceRelativePath } from '../../types/markdownLifecycle';
-import { isRepositoryTokenStale } from '../git-service';
+import {
+  buildGitSnapshotRequest,
+  getGitSnapshotEligibility,
+  isRepositoryTokenStale,
+} from '../git-service';
 import { openDocumentForEditor, isSavedMarkdownResult, tauriWorkspaceCommands } from './commands';
 import {
   createSaveRequest,
@@ -17,6 +21,7 @@ import type {
   PendingDocumentAction,
   RestoreActiveFromGitInput,
   ExternalChangeBatch,
+  GitSnapshotActionResult,
   WorkspaceCommands,
   WorkspaceLifecycleState,
 } from './types';
@@ -30,6 +35,9 @@ export interface WorkspaceLifecycleActions {
   openWorkspace(path: string): Promise<void>;
   createWorkspace(path: string): Promise<void>;
   refreshFiles(): Promise<void>;
+  refreshGitState(): Promise<void>;
+  enableGit(): Promise<boolean>;
+  createGitSnapshot(message: string): Promise<GitSnapshotActionResult>;
   requestCreateFile(relativePath: WorkspaceRelativePath): Promise<void>;
   requestOpenFile(relativePath: WorkspaceRelativePath): Promise<void>;
   requestRenameActive(newRelativePath: WorkspaceRelativePath): Promise<void>;
@@ -62,23 +70,45 @@ export function useWorkspaceLifecycle(
     initialWorkspaceLifecycleState,
   );
   const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
 
   const refreshGitStateDirect = useCallback(
-    async (workspaceId: string) => {
+    async (workspaceId: string, options: { swallowErrors?: boolean } = {}) => {
       try {
         const status = await commands.refreshGitState(workspaceId);
         dispatch({ type: 'git-status-refreshed', status });
         return status;
-      } catch {
+      } catch (error) {
+        if (options.swallowErrors === false) {
+          throw error;
+        }
+
         return null;
       }
     },
     [commands],
   );
+
+  const refreshGitStateForCurrentWorkspace = useCallback(async () => {
+    const workspaceId = stateRef.current.workspace?.id;
+
+    if (!workspaceId) {
+      return;
+    }
+
+    dispatch({ type: 'operation-started' });
+
+    try {
+      await refreshGitStateDirect(workspaceId, { swallowErrors: false });
+      dispatch({ type: 'operation-finished' });
+    } catch (error) {
+      dispatch({ type: 'operation-failed', error });
+    }
+  }, [refreshGitStateDirect]);
 
   const openFileDirect = useCallback(
     async (workspaceId: string, relativePath: WorkspaceRelativePath) => {
@@ -249,6 +279,7 @@ export function useWorkspaceLifecycle(
             markdownDocument,
           });
           await commands.rememberLastOpenedFile(current.workspace.id, result.newRelativePath);
+          void refreshGitStateDirect(current.workspace.id);
         } catch (error) {
           dispatch({ type: 'operation-failed', error });
         }
@@ -265,6 +296,7 @@ export function useWorkspaceLifecycle(
             expectedVersion: active.snapshot.version,
           });
           dispatch({ type: 'document-deleted', files: result.files });
+          void refreshGitStateDirect(current.workspace.id);
         } catch (error) {
           dispatch({ type: 'operation-failed', error });
         }
@@ -273,7 +305,7 @@ export function useWorkspaceLifecycle(
 
       dispatch({ type: 'document-closed' });
     },
-    [commands, openFileDirect],
+    [commands, openFileDirect, refreshGitStateDirect],
   );
 
   const saveActive = useCallback(
@@ -339,6 +371,7 @@ export function useWorkspaceLifecycle(
             currentContentRevision,
           },
         });
+        void refreshGitStateDirect(current.workspace.id);
 
         return currentContentRevision === request.revision;
       } catch (error) {
@@ -346,7 +379,7 @@ export function useWorkspaceLifecycle(
         return false;
       }
     },
-    [commands],
+    [commands, refreshGitStateDirect],
   );
 
   const restoreActiveFromGit = useCallback(
@@ -417,6 +450,82 @@ export function useWorkspaceLifecycle(
     [commands],
   );
 
+  const enableGit = useCallback(async () => {
+    const workspaceId = stateRef.current.workspace?.id;
+
+    if (!workspaceId) {
+      return false;
+    }
+
+    dispatch({ type: 'operation-started' });
+
+    try {
+      await commands.initializeGitRepository(workspaceId);
+      await refreshGitStateDirect(workspaceId, { swallowErrors: false });
+      dispatch({ type: 'operation-finished' });
+      return true;
+    } catch (error) {
+      dispatch({ type: 'operation-failed', error });
+      return false;
+    }
+  }, [commands, refreshGitStateDirect]);
+
+  const createGitSnapshot = useCallback(
+    async (message: string): Promise<GitSnapshotActionResult> => {
+      const current = stateRef.current;
+
+      if (!current.workspace || !current.gitStatus) {
+        const error = {
+          code: 'not_repository',
+          operation: 'snapshot',
+          message: 'Refresh Git status before creating a snapshot.',
+          recoverable: true,
+        };
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+
+      const hasUnsavedEditorChanges =
+        current.active?.contentRevision !== current.active?.savedContentRevision;
+      const eligibility = getGitSnapshotEligibility({
+        workspaceId: current.workspace.id,
+        status: current.gitStatus,
+        blockedState: current.gitBlockedState,
+        hasUnsavedEditorChanges,
+      });
+      const request = buildGitSnapshotRequest({
+        workspaceId: current.workspace.id,
+        status: current.gitStatus,
+        files: current.files,
+        message,
+      });
+
+      if (!eligibility.canCreateSnapshot || !request) {
+        const error = {
+          code: 'no_changes',
+          operation: 'snapshot',
+          message: eligibility.disabledReasons[0]?.message ?? 'Snapshot is not available.',
+          recoverable: true,
+          relativePath: current.active?.snapshot.relativePath,
+        };
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+
+      dispatch({ type: 'operation-started' });
+
+      try {
+        const result = await commands.createGitSnapshot(request);
+        dispatch({ type: 'git-snapshot-created', result });
+        return { ok: true, result };
+      } catch (error) {
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+    },
+    [commands],
+  );
+
   const actions = useMemo<WorkspaceLifecycleActions>(
     () => ({
       async openWorkspace(path) {
@@ -458,6 +567,12 @@ export function useWorkspaceLifecycle(
           }
         }
       },
+
+      refreshGitState: refreshGitStateForCurrentWorkspace,
+
+      enableGit,
+
+      createGitSnapshot,
 
       requestCreateFile(relativePath) {
         return performAction({ type: 'create-file', relativePath: normalizeMarkdownPath(relativePath) });
@@ -528,7 +643,17 @@ export function useWorkspaceLifecycle(
 
       saveActive,
     }),
-    [commands, loadSession, performAction, refreshGitStateDirect, restoreActiveFromGit, saveActive],
+    [
+      commands,
+      createGitSnapshot,
+      enableGit,
+      loadSession,
+      performAction,
+      refreshGitStateDirect,
+      refreshGitStateForCurrentWorkspace,
+      restoreActiveFromGit,
+      saveActive,
+    ],
   );
 
   return [state, actions];

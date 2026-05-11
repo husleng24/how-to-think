@@ -299,6 +299,7 @@ export type GitBlockedStateKind =
   | 'repository_corrupt'
   | 'git_unavailable'
   | 'permission_denied'
+  | 'identity_missing'
   | 'stale_repository_state'
   | 'stale_file_state';
 

@@ -9,7 +9,12 @@ import {
   gitBlockedStateForRepository,
   gitBlockedStateFromError,
 } from '../git-service';
-import type { GitOperationError, GitServiceOperation, GitStatusSummary } from '../git-service';
+import type {
+  GitOperationError,
+  GitServiceOperation,
+  GitSnapshotResult,
+  GitStatusSummary,
+} from '../git-service';
 import { mapWorkspaceError, saveStatusFromBlockedResult, saveStatusFromError } from './errorMapping';
 import type {
   ActiveDocumentState,
@@ -30,9 +35,11 @@ export type WorkspaceLifecycleAction =
   | { type: 'workspace-loaded'; session: WorkspaceSession }
   | { type: 'startup-failed'; error: unknown }
   | { type: 'operation-started' }
+  | { type: 'operation-finished' }
   | { type: 'operation-failed'; error: unknown }
   | { type: 'files-refreshed'; files: WorkspaceFile[] }
   | { type: 'git-status-refreshed'; status: GitStatusSummary }
+  | { type: 'git-snapshot-created'; result: GitSnapshotResult }
   | { type: 'external-change-detected'; batch: ExternalChangeBatch }
   | { type: 'document-opened'; payload: OpenedDocumentPayload }
   | {
@@ -135,6 +142,12 @@ export function workspaceLifecycleReducer(
         lastError: null,
       };
 
+    case 'operation-finished':
+      return {
+        ...state,
+        isBusy: false,
+      };
+
     case 'operation-failed':
       return {
         ...state,
@@ -159,6 +172,19 @@ export function workspaceLifecycleReducer(
         ...state,
         gitStatus: action.status,
         gitBlockedState: gitBlockedStateForRepository(action.status.repositoryState, 'refresh'),
+      };
+
+    case 'git-snapshot-created':
+      if (state.workspace?.id !== action.result.workspaceId) {
+        return state;
+      }
+
+      return {
+        ...state,
+        gitStatus: action.result.status,
+        gitBlockedState: gitBlockedStateForRepository(action.result.repositoryState, 'snapshot'),
+        lastError: null,
+        isBusy: false,
       };
 
     case 'external-change-detected':

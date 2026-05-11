@@ -531,6 +531,205 @@ button {
   font-weight: 800;
 }
 
+.git-workflow-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.git-panel-heading,
+.git-dialog-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.git-panel-note,
+.git-validation-message {
+  margin: 0;
+  color: #6a6259;
+  font-size: 0.82rem;
+  line-height: 1.4;
+}
+
+.git-validation-message {
+  color: #7c4b18;
+  font-weight: 700;
+}
+
+.git-panel-message {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid #bfd3ce;
+  border-radius: 8px;
+  background: #eef8f4;
+  color: #24573a;
+}
+
+.git-panel-message.warning {
+  border-color: #d6c7a6;
+  background: #fff7df;
+  color: #6a4518;
+}
+
+.git-panel-message.success {
+  border-color: #6c9a7c;
+  background: #eef8f4;
+  color: #24573a;
+}
+
+.git-panel-message strong {
+  display: block;
+  color: inherit;
+}
+
+.git-panel-message p {
+  margin: 3px 0 0;
+  color: #4e4a45;
+  font-size: 0.82rem;
+  line-height: 1.35;
+}
+
+.git-summary-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.git-summary-list div {
+  display: grid;
+  grid-template-columns: 78px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.git-summary-list dt {
+  color: #6a6259;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.git-summary-list dd {
+  margin: 0;
+  color: #2f3334;
+  font-weight: 700;
+}
+
+.git-status-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.git-status-group {
+  display: grid;
+  gap: 6px;
+}
+
+.git-status-group h3 {
+  margin: 0;
+  color: #202225;
+  font-size: 0.86rem;
+}
+
+.git-status-group ul,
+.git-affected-summary ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.git-status-group li,
+.git-affected-summary li {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 7px 8px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #343434;
+  font-size: 0.82rem;
+}
+
+.git-disabled-reasons {
+  display: grid;
+  gap: 5px;
+  color: #7c4b18;
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+
+.git-action-row .text-button {
+  width: 100%;
+}
+
+.git-dialog,
+.modal-panel {
+  display: grid;
+  width: min(520px, 100%);
+  max-height: calc(100vh - 48px);
+  gap: 14px;
+  overflow: auto;
+  padding: 18px;
+  border: 1px solid #cfc4b4;
+  border-radius: 8px;
+  background: #fffdf8;
+  box-shadow: 0 18px 40px rgba(20, 18, 15, 0.22);
+}
+
+.git-dialog h2,
+.modal-panel h2 {
+  margin: 4px 0 0;
+  color: #202225;
+  font-size: 1rem;
+}
+
+.git-dialog > p,
+.modal-panel > p {
+  margin: 0;
+  color: #4e4a45;
+  line-height: 1.45;
+}
+
+.git-message-field textarea {
+  width: 100%;
+  min-width: 0;
+  resize: vertical;
+  padding: 9px 10px;
+  border: 1px solid #ccc4b5;
+  border-radius: 8px;
+  background: #fffdf8;
+  color: #202225;
+  font: inherit;
+  font-weight: 600;
+}
+
+.git-message-field textarea:focus {
+  border-color: #317682;
+  outline: 2px solid rgba(49, 118, 130, 0.22);
+}
+
+.git-affected-summary {
+  display: grid;
+  gap: 8px;
+}
+
+.git-affected-summary strong {
+  color: #202225;
+  font-size: 0.9rem;
+}
+
+.git-affected-summary span {
+  color: #6a6259;
+  font-size: 0.8rem;
+}
+
+.git-dialog-actions {
+  justify-content: flex-end;
+}
+
 .metadata-list {
   display: grid;
   gap: 10px;

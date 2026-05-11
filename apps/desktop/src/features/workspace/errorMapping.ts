@@ -69,7 +69,19 @@ export function mapWorkspaceError(error: unknown): UserMessage {
     case 'external_state_changed':
       return {
         title: 'Git state changed',
-        detail: 'Refresh Git status and try the restore again.',
+        detail: 'Refresh Git status and try the Git action again.',
+        relativePath,
+      };
+    case 'identity_missing':
+      return {
+        title: 'Git identity needed',
+        detail: 'Configure a Git author name and email before creating snapshots.',
+        relativePath,
+      };
+    case 'no_changes':
+      return {
+        title: 'No changes',
+        detail: workspaceError.message || 'No workspace changes are available to snapshot.',
         relativePath,
       };
     case 'detached_head':
@@ -101,7 +113,7 @@ export function mapWorkspaceError(error: unknown): UserMessage {
     case 'merge_conflict':
       return {
         title: 'Merge conflict active',
-        detail: 'Resolve the Git conflict before restoring a historical file.',
+        detail: 'Resolve the Git conflict before creating snapshots or restoring files.',
         relativePath,
       };
     default:

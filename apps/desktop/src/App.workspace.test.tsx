@@ -4,6 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from './App';
 import type {
+  GitOperationError,
+  GitRepositoryState,
+  GitRepositoryStateToken,
+  GitSnapshotRequest,
+  GitSnapshotResult,
+  GitStatusEntry,
+  GitStatusSummary,
+} from './features/git-service';
+import type {
   FileVersion,
   MarkdownMindMapDocument,
   OpenMarkdownMindMapResult,
@@ -260,6 +269,194 @@ describe('App workspace lifecycle', () => {
     expect(webSocketMock).not.toHaveBeenCalled();
   });
 
+  it('enables Git, shows grouped status, and creates a local snapshot', async () => {
+    const dirtyStatus = gitStatusSummary([
+      gitStatusEntry('notes/added.md', 'added'),
+      gitStatusEntry('notes/plan.md', 'modified'),
+      gitStatusEntry('notes/new.md', 'untracked'),
+      gitStatusEntry('notes/old.md', 'deleted'),
+      gitStatusEntry('notes/renamed.md', 'renamed', 'notes/draft.md'),
+    ]);
+    const cleanStatus = gitStatusSummary([], {
+      token: 'clean-token',
+      hasChanges: false,
+      changedFileCount: 0,
+      untrackedFileCount: 0,
+    });
+    let gitEnabled = false;
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(
+            workspaceSession([
+              workspaceFile('notes/added.md'),
+              workspaceFile('notes/plan.md'),
+              workspaceFile('notes/new.md'),
+              workspaceFile('notes/renamed.md'),
+            ]),
+          );
+        case 'git_refresh':
+          return Promise.resolve(gitEnabled ? dirtyStatus : notRepositoryStatus());
+        case 'git_init_repository':
+          gitEnabled = true;
+          return Promise.resolve(dirtyStatus.repositoryState);
+        case 'git_create_snapshot': {
+          const request = payload?.request as GitSnapshotRequest;
+          expect(request.message).toBe('Save local work');
+          expect(request.scopePaths).toEqual([
+            'notes/added.md',
+            'notes/plan.md',
+            'notes/new.md',
+            'notes/old.md',
+            'notes/renamed.md',
+          ]);
+          expect(request.expectedFileStates.map((state) => state.relativePath)).toEqual([
+            'notes/added.md',
+            'notes/new.md',
+            'notes/plan.md',
+            'notes/renamed.md',
+          ]);
+          return Promise.resolve(snapshotResult(request, cleanStatus));
+        }
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Git is off for this workspace')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Enable Git' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Confirm enable Git' }));
+
+    expect(await screen.findByText('Modified')).toBeVisible();
+    expect(screen.getByText('Added')).toBeVisible();
+    expect(screen.getAllByText('Untracked').length).toBeGreaterThan(0);
+    expect(screen.getByText('Deleted')).toBeVisible();
+    expect(screen.getByText('Renamed')).toBeVisible();
+    expect(screen.getByText('notes/draft.md -> notes/renamed.md')).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /create snapshot/i }));
+    fireEvent.change(await screen.findByLabelText(/snapshot message/i), {
+      target: { value: 'Save local work' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /confirm snapshot/i }));
+
+    expect(await screen.findAllByText('Snapshot abc123def456 created')).toHaveLength(2);
+    expect(screen.getAllByText('Save local work')).toHaveLength(2);
+    expect(screen.getAllByText('Clean').length).toBeGreaterThan(0);
+  });
+
+  it('surfaces blocked Git repository states and disables snapshot creation', async () => {
+    invokeMock.mockImplementation((command) => {
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(workspaceSession([workspaceFile('notes/plan.md')]));
+        case 'git_refresh':
+          return Promise.resolve(
+            gitStatusSummary([gitStatusEntry('notes/plan.md', 'modified')], {
+              repositoryState: 'merge_conflict',
+              blockedReason: 'merge_conflict',
+              hasConflicts: true,
+            }),
+          );
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Merge conflict active')).toBeVisible();
+    expect(
+      screen.getByText('Resolve the Git conflict before creating snapshots or restoring files.'),
+    ).toBeVisible();
+
+    fireEvent.click(screen.getByRole('button', { name: /create snapshot/i }));
+    expect(await screen.findByRole('dialog', { name: /create git snapshot/i })).toBeVisible();
+    expect(screen.getByRole('button', { name: /confirm snapshot/i })).toBeDisabled();
+  });
+
+  it('shows stale snapshot failures and clears them after Git status refresh', async () => {
+    const initialStatus = gitStatusSummary([gitStatusEntry('notes/plan.md', 'modified')]);
+    const refreshedStatus = gitStatusSummary([gitStatusEntry('notes/plan.md', 'modified')], {
+      token: 'refreshed-token',
+    });
+    let refreshCount = 0;
+
+    invokeMock.mockImplementation((command) => {
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(workspaceSession([workspaceFile('notes/plan.md')]));
+        case 'git_refresh':
+          refreshCount += 1;
+          return Promise.resolve(refreshCount > 1 ? refreshedStatus : initialStatus);
+        case 'git_create_snapshot':
+          return Promise.reject(gitError('external_state_changed', 'Repository changed.'));
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByText('Workspace changes')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /create snapshot/i }));
+    const staleDialog = await screen.findByRole('dialog', { name: /create git snapshot/i });
+    fireEvent.change(within(staleDialog).getByLabelText(/snapshot message/i), {
+      target: { value: 'Save plan' },
+    });
+    fireEvent.click(within(staleDialog).getByRole('button', { name: /confirm snapshot/i }));
+
+    expect(await screen.findByText('Git state changed')).toBeVisible();
+    expect(screen.getAllByText('Repository changed.')).toHaveLength(2);
+
+    fireEvent.click(within(staleDialog).getByRole('button', { name: 'Refresh Git status' }));
+
+    await waitFor(() => expect(screen.queryByText('Repository changed.')).not.toBeInTheDocument());
+    expect(screen.getByRole('button', { name: /confirm snapshot/i })).toBeEnabled();
+  });
+
+  it('does not represent unsaved editor content as snapshot-ready changes', async () => {
+    const fixture = createWorkspaceLifecycleFixture({
+      markdownFiles: {
+        'notes/plan.md': '# Plan\n',
+      },
+    });
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(fixture.session({ lastOpenedFile: 'notes/plan.md' }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(fixture.openResult(payload?.request?.relativePath ?? 'notes/plan.md'));
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        case 'git_refresh':
+          return Promise.resolve(gitStatusSummary([gitStatusEntry('notes/plan.md', 'modified')]));
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Plan' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /add child node/i }));
+
+    expect(await screen.findByText('Unsaved editor changes')).toBeVisible();
+    expect(screen.getByText(/save markdown before snapshotting/i)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /create snapshot/i }));
+    expect(await screen.findByRole('dialog', { name: /create git snapshot/i })).toBeVisible();
+    expect(screen.getByText(/unsaved editor content is not included/i)).toBeVisible();
+    expect(screen.getByRole('button', { name: /confirm snapshot/i })).toBeDisabled();
+  });
+
   it.each([
     ['external edit conflict', 'version_conflict', /changed on disk/i],
     ['external deletion', 'file_not_found', /no longer exists/i],
@@ -450,6 +647,163 @@ describe('App workspace lifecycle', () => {
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
   });
 });
+
+function gitStatusEntry(
+  relativePath: string,
+  kind: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked',
+  previousRelativePath?: string,
+): GitStatusEntry {
+  if (kind === 'modified') {
+    return {
+      relativePath,
+      staged: 'unmodified',
+      unstaged: 'modified',
+      conflicted: false,
+    };
+  }
+
+  if (kind === 'untracked') {
+    return {
+      relativePath,
+      staged: 'untracked',
+      unstaged: 'untracked',
+      conflicted: false,
+    };
+  }
+
+  return {
+    relativePath,
+    previousRelativePath,
+    staged: kind,
+    unstaged: 'unmodified',
+    conflicted: false,
+  };
+}
+
+function gitStatusSummary(
+  entries: GitStatusEntry[],
+  input: {
+    token?: string;
+    repositoryState?: GitRepositoryState['state'];
+    blockedReason?: GitRepositoryState['blockedReason'];
+    hasChanges?: boolean;
+    hasConflicts?: boolean;
+    changedFileCount?: number;
+    untrackedFileCount?: number;
+  } = {},
+): GitStatusSummary {
+  const token = gitRepositoryToken(input.token ?? 'repo-token');
+  const counts = {
+    added: entries.filter((entry) => entry.staged === 'added' || entry.unstaged === 'added').length,
+    modified: entries.filter((entry) => entry.staged === 'modified' || entry.unstaged === 'modified').length,
+    deleted: entries.filter((entry) => entry.staged === 'deleted' || entry.unstaged === 'deleted').length,
+    renamed: entries.filter((entry) => entry.staged === 'renamed' || entry.unstaged === 'renamed').length,
+    untracked: entries.filter((entry) => entry.staged === 'untracked' || entry.unstaged === 'untracked').length,
+    ignored: 0,
+  };
+  const repositoryState = gitRepositoryState(input.repositoryState ?? 'valid_repository', {
+    token,
+    blockedReason: input.blockedReason,
+  });
+
+  return {
+    workspaceId: 'workspace-1',
+    repositoryState,
+    token,
+    entries,
+    counts,
+    hasChanges: input.hasChanges ?? entries.length > 0,
+    hasConflicts: input.hasConflicts ?? false,
+    changedFileCount: input.changedFileCount ?? entries.length,
+    untrackedFileCount: input.untrackedFileCount ?? counts.untracked,
+    refreshedAt: '2026-05-10T00:02:00Z',
+  };
+}
+
+function notRepositoryStatus(): GitStatusSummary {
+  return {
+    workspaceId: 'workspace-1',
+    repositoryState: gitRepositoryState('not_repository', { token: null }),
+    token: null,
+    entries: [],
+    counts: {
+      added: 0,
+      modified: 0,
+      deleted: 0,
+      renamed: 0,
+      untracked: 0,
+      ignored: 0,
+    },
+    hasChanges: false,
+    hasConflicts: false,
+    changedFileCount: 0,
+    untrackedFileCount: 0,
+    refreshedAt: '2026-05-10T00:02:00Z',
+  };
+}
+
+function gitRepositoryState(
+  state: GitRepositoryState['state'],
+  input: {
+    token: GitRepositoryStateToken | null;
+    blockedReason?: GitRepositoryState['blockedReason'];
+  },
+): GitRepositoryState {
+  return {
+    workspaceId: 'workspace-1',
+    state,
+    backend: {
+      kind: 'system_git',
+      version: 'git version 2.52.0',
+    },
+    selectedRootDisplayPath: 'C:\\Notes',
+    repositoryRootDisplayPath: state === 'not_repository' ? null : 'C:\\Notes',
+    branchName: state === 'detached_head' ? null : 'main',
+    headOid: input.token?.headOid ?? null,
+    token: input.token,
+    blockedReason: input.blockedReason ?? null,
+    warnings: [],
+    checkedAt: '2026-05-10T00:02:00Z',
+  };
+}
+
+function gitRepositoryToken(token: string): GitRepositoryStateToken {
+  return {
+    token,
+    headOid: 'abc123def4567890',
+    indexVersion: 3,
+    indexChecksum: 'index-checksum',
+    worktreeStatusGeneration: token,
+    capturedAt: '2026-05-10T00:02:00Z',
+  };
+}
+
+function snapshotResult(
+  request: GitSnapshotRequest,
+  status: GitStatusSummary,
+): GitSnapshotResult {
+  return {
+    workspaceId: request.workspaceId,
+    commitOid: 'abc123def4567890abc123def4567890abc123de',
+    shortCommitOid: 'abc123def456',
+    parentOids: [],
+    message: request.message,
+    affectedPaths: request.scopePaths,
+    affectedFileCount: request.scopePaths.length,
+    repositoryState: status.repositoryState,
+    status,
+    snapshotAt: '2026-05-10T00:03:00Z',
+  };
+}
+
+function gitError(code: GitOperationError['code'], message: string): GitOperationError {
+  return {
+    code,
+    operation: 'snapshot',
+    message,
+    recoverable: true,
+  };
+}
 
 interface InvokePayload {
   workspaceId?: string;

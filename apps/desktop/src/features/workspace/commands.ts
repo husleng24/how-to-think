@@ -12,7 +12,12 @@ import type {
   WorkspaceId,
   WorkspaceRelativePath,
 } from '../../types/markdownLifecycle';
-import type { GitRestoreResult, GitStatusSummary } from '../git-service';
+import type {
+  GitRepositoryState,
+  GitRestoreResult,
+  GitSnapshotResult,
+  GitStatusSummary,
+} from '../git-service';
 import type {
   DeleteDocumentResult,
   DocumentExternalChangeStatus,
@@ -42,6 +47,14 @@ export const tauriWorkspaceCommands: WorkspaceCommands = {
 
   refreshGitState(workspaceId) {
     return invoke<GitStatusSummary>('git_refresh', { workspaceId });
+  },
+
+  initializeGitRepository(workspaceId) {
+    return invoke<GitRepositoryState>('git_init_repository', { workspaceId });
+  },
+
+  createGitSnapshot(input) {
+    return invoke<GitSnapshotResult>('git_create_snapshot', { request: input });
   },
 
   startWorkspaceChangeDetection(workspaceId) {

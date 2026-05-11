@@ -514,6 +514,10 @@ function blockedKindForErrorCode(code: GitOperationErrorCode): GitBlockedStateKi
     return 'permission_denied';
   }
 
+  if (code === 'identity_missing') {
+    return 'identity_missing';
+  }
+
   return null;
 }
 
@@ -563,6 +567,11 @@ function gitBlockedStateCopy(kind: GitBlockedStateKind): { title: string; detail
       return {
         title: 'Permission needed',
         detail: 'The repository or workspace cannot be read or written with current permissions.',
+      };
+    case 'identity_missing':
+      return {
+        title: 'Git identity needed',
+        detail: 'Configure a Git author name and email before creating snapshots.',
       };
     case 'stale_repository_state':
       return {

@@ -31,6 +31,7 @@ import type {
   ProposalReviewStore,
 } from '../features/ai-proposals';
 import { ExportDialog } from '../features/export';
+import { GitWorkflowPanel } from '../features/git-workflow';
 import {
   CompatibilityDiagnosticsPanel,
   resolveWorkspaceLink,
@@ -118,6 +119,7 @@ export function EditorShell({
   );
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
+  const [isGitSnapshotDialogOpen, setIsGitSnapshotDialogOpen] = useState(false);
   const [newMarkdownPath, setNewMarkdownPath] = useState('');
   const [markdownPathInput, setMarkdownPathInput] = useState(
     workspaceState?.active?.snapshot.relativePath ?? '',
@@ -238,7 +240,14 @@ export function EditorShell({
             <Bot size={17} />
             AI
           </button>
-          <button className="text-button" type="button">
+          <button
+            className="text-button"
+            type="button"
+            aria-label="Open Git snapshot"
+            title={workspaceState?.workspace ? 'Open Git snapshot' : 'Open a workspace first.'}
+            disabled={!workspaceState?.workspace}
+            onClick={() => setIsGitSnapshotDialogOpen(true)}
+          >
             <GitBranch size={17} />
             Git
           </button>
@@ -406,25 +415,12 @@ export function EditorShell({
             </dl>
           </section>
 
-          {workspaceState?.gitBlockedState ? (
-            <section className="inspector-section git-state-panel">
-              <p className="field-label">Git</p>
-              <p className="git-state-title">{workspaceState.gitBlockedState.title}</p>
-              <p>{workspaceState.gitBlockedState.detail}</p>
-            </section>
-          ) : workspaceState?.gitStatus ? (
-            <section className="inspector-section git-state-panel">
-              <p className="field-label">Git</p>
-              <p className="git-state-title">
-                {workspaceState.gitStatus.repositoryState.branchName ?? 'No branch'}
-              </p>
-              <p>
-                {workspaceState.gitStatus.changedFileCount === 1
-                  ? '1 changed file'
-                  : `${workspaceState.gitStatus.changedFileCount} changed files`}
-              </p>
-            </section>
-          ) : null}
+          <GitWorkflowPanel
+            workspaceState={workspaceState}
+            workspaceActions={workspaceActions}
+            snapshotDialogOpen={isGitSnapshotDialogOpen}
+            onSnapshotDialogOpenChange={setIsGitSnapshotDialogOpen}
+          />
 
           <section className="inspector-section">
             <CompatibilityDiagnosticsPanel

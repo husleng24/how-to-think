@@ -2,10 +2,13 @@ import {
   GIT_OPERATION_ERROR_CODES,
   GIT_OPERATION_PERMISSION_MATRIX,
   GIT_SERVICE_METHODS,
+  buildGitSnapshotRequest,
   gitBlockedStateForRepository,
   gitBlockedStateFromError,
   gitMethodRequiresExpectedRepoToken,
   gitOperationPolicy,
+  getGitSnapshotEligibility,
+  groupGitStatusEntries,
   isGitOperationAllowed,
   isRepositoryTokenStale,
   validateGitRestoreRequestContract,
@@ -22,6 +25,7 @@ import type {
   GitSnapshotRequest,
   GitStatusSummary,
 } from './types';
+import type { WorkspaceFile } from '../../types/markdownLifecycle';
 
 const sampleToken: GitRepositoryStateToken = {
   token: 'head:abc:index:3:status:clean',
@@ -406,6 +410,17 @@ describe('Git service contract', () => {
     });
     expect(
       gitBlockedStateFromError({
+        code: 'identity_missing',
+        operation: 'snapshot',
+        message: 'Author identity unknown.',
+        recoverable: true,
+      }),
+    ).toMatchObject({
+      kind: 'identity_missing',
+      operation: 'snapshot',
+    });
+    expect(
+      gitBlockedStateFromError({
         code: 'restore_conflict',
         operation: 'restore',
         message: 'File changed.',
@@ -413,4 +428,243 @@ describe('Git service contract', () => {
       }),
     ).toMatchObject({ kind: 'stale_file_state' });
   });
+
+  it('groups status entries into UI sections without exposing ignored files', () => {
+    const groups = groupGitStatusEntries([
+      {
+        relativePath: 'notes/added.md',
+        staged: 'added',
+        unstaged: 'unmodified',
+        conflicted: false,
+      },
+      {
+        relativePath: 'notes/plan.md',
+        staged: 'unmodified',
+        unstaged: 'modified',
+        conflicted: false,
+      },
+      {
+        relativePath: 'notes/new.md',
+        staged: 'untracked',
+        unstaged: 'untracked',
+        conflicted: false,
+      },
+      {
+        relativePath: 'notes/old.md',
+        staged: 'deleted',
+        unstaged: 'unmodified',
+        conflicted: false,
+      },
+      {
+        relativePath: 'notes/renamed.md',
+        previousRelativePath: 'notes/draft.md',
+        staged: 'renamed',
+        unstaged: 'unmodified',
+        conflicted: false,
+      },
+      {
+        relativePath: 'notes/ignored.md',
+        staged: 'ignored',
+        unstaged: 'ignored',
+        conflicted: false,
+      },
+    ]);
+
+    expect(groups.map((group) => group.kind)).toEqual([
+      'added',
+      'modified',
+      'deleted',
+      'renamed',
+      'untracked',
+    ]);
+    expect(groups.flatMap((group) => group.entries.map((entry) => entry.relativePath))).not.toContain(
+      'notes/ignored.md',
+    );
+  });
+
+  it('derives snapshot disabled reasons for clean, blocked, stale, identity, and unsaved states', () => {
+    const dirtyStatus = gitStatusSummary('notes/plan.md');
+    const cleanStatus: GitStatusSummary = {
+      ...dirtyStatus,
+      entries: [],
+      counts: {
+        added: 0,
+        modified: 0,
+        deleted: 0,
+        renamed: 0,
+        untracked: 0,
+        ignored: 0,
+      },
+      hasChanges: false,
+      changedFileCount: 0,
+      untrackedFileCount: 0,
+    };
+
+    expect(
+      getGitSnapshotEligibility({
+        workspaceId: 'workspace-1',
+        status: cleanStatus,
+      }).disabledReasons.map((reason) => reason.code),
+    ).toContain('no_changes');
+    expect(
+      getGitSnapshotEligibility({
+        workspaceId: 'workspace-1',
+        status: {
+          ...dirtyStatus,
+          repositoryState: {
+            ...dirtyStatus.repositoryState,
+            state: 'detached_head',
+            blockedReason: 'detached_head',
+          },
+        },
+      }).disabledReasons.map((reason) => reason.code),
+    ).toContain('repository_blocked');
+    expect(
+      getGitSnapshotEligibility({
+        workspaceId: 'workspace-1',
+        status: {
+          ...dirtyStatus,
+          repositoryState: {
+            ...dirtyStatus.repositoryState,
+            token: {
+              ...sampleToken,
+              token: 'new-token',
+            },
+          },
+        },
+      }).disabledReasons.map((reason) => reason.code),
+    ).toContain('stale_repository_state');
+    expect(
+      getGitSnapshotEligibility({
+        workspaceId: 'workspace-1',
+        status: dirtyStatus,
+        blockedState: {
+          kind: 'identity_missing',
+          operation: 'snapshot',
+          code: 'identity_missing',
+          title: 'Git identity needed',
+          detail: 'Configure a Git author name and email before creating snapshots.',
+          recoverable: true,
+        },
+      }).disabledReasons.map((reason) => reason.code),
+    ).toContain('missing_identity');
+    expect(
+      getGitSnapshotEligibility({
+        workspaceId: 'workspace-1',
+        status: dirtyStatus,
+        hasUnsavedEditorChanges: true,
+      }).disabledReasons.map((reason) => reason.code),
+    ).toContain('unsaved_editor_changes');
+  });
+
+  it('builds snapshot requests from eligible status entries and current file versions', () => {
+    const status: GitStatusSummary = {
+      ...gitStatusSummary('notes/plan.md'),
+      entries: [
+        {
+          relativePath: 'notes/plan.md',
+          staged: 'unmodified',
+          unstaged: 'modified',
+          conflicted: false,
+        },
+        {
+          relativePath: 'notes/deleted.md',
+          staged: 'deleted',
+          unstaged: 'unmodified',
+          conflicted: false,
+        },
+        {
+          relativePath: 'notes/ignored.md',
+          staged: 'ignored',
+          unstaged: 'ignored',
+          conflicted: false,
+        },
+      ],
+    };
+    const files: WorkspaceFile[] = [
+      {
+        relativePath: 'notes/plan.md',
+        name: 'plan.md',
+        extension: '.md',
+        byteSize: 12,
+        modifiedAt: sampleFileVersion.modifiedAt,
+        version: sampleFileVersion,
+      },
+    ];
+
+    expect(
+      buildGitSnapshotRequest({
+        workspaceId: 'workspace-1',
+        status,
+        files,
+        message: '  Save plan  ',
+      }),
+    ).toMatchObject({
+      workspaceId: 'workspace-1',
+      message: 'Save plan',
+      scopePaths: ['notes/plan.md', 'notes/deleted.md'],
+      expectedFileStates: [
+        {
+          relativePath: 'notes/plan.md',
+          expectedVersion: sampleFileVersion,
+        },
+      ],
+    });
+    expect(
+      buildGitSnapshotRequest({
+        workspaceId: 'workspace-1',
+        status,
+        files,
+        message: '   ',
+      }),
+    ).toBeNull();
+  });
 });
+
+function gitStatusSummary(relativePath: string, token = sampleToken.token): GitStatusSummary {
+  const repositoryState: GitRepositoryState = {
+    workspaceId: 'workspace-1',
+    state: 'valid_repository',
+    backend: {
+      kind: 'system_git',
+      version: 'git version 2.52.0',
+    },
+    selectedRootDisplayPath: 'C:/Users/example/notes',
+    repositoryRootDisplayPath: 'C:/Users/example/notes',
+    branchName: 'main',
+    headOid: sampleToken.headOid,
+    token: {
+      ...sampleToken,
+      token,
+    },
+    warnings: [],
+    checkedAt: '2026-05-11T00:00:01.000Z',
+  };
+
+  return {
+    workspaceId: 'workspace-1',
+    repositoryState,
+    token: repositoryState.token ?? null,
+    entries: [
+      {
+        relativePath,
+        staged: 'unmodified',
+        unstaged: 'modified',
+        conflicted: false,
+      },
+    ],
+    counts: {
+      added: 0,
+      modified: 1,
+      deleted: 0,
+      renamed: 0,
+      untracked: 0,
+      ignored: 0,
+    },
+    hasChanges: true,
+    hasConflicts: false,
+    changedFileCount: 1,
+    untrackedFileCount: 0,
+    refreshedAt: '2026-05-11T00:00:02.000Z',
+  };
+}

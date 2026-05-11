@@ -188,6 +188,53 @@ describe('workspace lifecycle store', () => {
     });
   });
 
+  it('updates Git status after a successful snapshot result', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    const dirtyStatus = gitStatusSummary('plan.md');
+    const cleanStatus: GitStatusSummary = {
+      ...dirtyStatus,
+      entries: [],
+      hasChanges: false,
+      changedFileCount: 0,
+      counts: {
+        added: 0,
+        modified: 0,
+        deleted: 0,
+        renamed: 0,
+        untracked: 0,
+        ignored: 0,
+      },
+    };
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'git-status-refreshed',
+      status: dirtyStatus,
+    });
+    state = workspaceLifecycleReducer(state, { type: 'operation-started' });
+    state = workspaceLifecycleReducer(state, {
+      type: 'git-snapshot-created',
+      result: {
+        workspaceId: 'workspace-1',
+        commitOid: 'abcdef1234567890abcdef1234567890abcdef12',
+        shortCommitOid: 'abcdef123456',
+        parentOids: [],
+        message: 'Save plan',
+        affectedPaths: ['plan.md'],
+        affectedFileCount: 1,
+        repositoryState: cleanStatus.repositoryState,
+        status: cleanStatus,
+        snapshotAt: '2026-05-10T00:03:00Z',
+      },
+    });
+
+    expect(state.gitStatus?.hasChanges).toBe(false);
+    expect(state.gitStatus?.entries).toEqual([]);
+    expect(state.isBusy).toBe(false);
+  });
+
   it('coalesces file-level and Git-level external changes into one state update', () => {
     let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
       type: 'workspace-loaded',
