@@ -68,6 +68,7 @@ pub fn run() {
             commands::open_markdown_mind_map,
             commands::serialize_mind_map,
             commands::save_markdown_mind_map,
+            commands::export_mind_map,
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
             commands::publish_desktop_session_status,

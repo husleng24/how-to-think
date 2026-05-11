@@ -1,5 +1,6 @@
 ﻿import {
   Bot,
+  Download,
   FilePlus2,
   FolderOpen,
   GitBranch,
@@ -29,6 +30,7 @@ import type {
   ProposalReviewEditorSnapshot,
   ProposalReviewStore,
 } from '../features/ai-proposals';
+import { ExportDialog } from '../features/export';
 import {
   CompatibilityDiagnosticsPanel,
   resolveWorkspaceLink,
@@ -115,6 +117,7 @@ export function EditorShell({
     workspaceState?.workspace?.displayPath ?? '',
   );
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+  const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [newMarkdownPath, setNewMarkdownPath] = useState('');
   const [markdownPathInput, setMarkdownPathInput] = useState(
     workspaceState?.active?.snapshot.relativePath ?? '',
@@ -206,6 +209,16 @@ export function EditorShell({
             onClick={() => void workspaceActions?.saveActiveDocument?.()}
           >
             <Save size={18} />
+          </button>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="Export mind map"
+            title="Export mind map"
+            disabled={!workspaceState?.active}
+            onClick={() => setIsExportDialogOpen(true)}
+          >
+            <Download size={18} />
           </button>
           <span className="toolbar-divider" aria-hidden="true" />
           <button
@@ -463,6 +476,13 @@ export function EditorShell({
         onReviewSuggestionDraft={reviewSuggestionDraft}
         onClose={() => setIsAiAssistantOpen(false)}
         onOpenProviderSettings={() => setIsAiAssistantOpen(false)}
+      />
+
+      <ExportDialog
+        open={isExportDialogOpen}
+        editorState={editorState}
+        workspaceState={workspaceState}
+        onClose={() => setIsExportDialogOpen(false)}
       />
 
       <footer className="status-bar">
