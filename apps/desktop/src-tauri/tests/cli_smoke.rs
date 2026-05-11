@@ -23,6 +23,16 @@ fn json_output(args: &[&str]) -> (Output, Value) {
     (output, envelope)
 }
 
+fn assert_file_prefix(path: &std::path::Path, expected: &[u8]) {
+    let bytes = fs::read(path).unwrap();
+    assert!(
+        bytes.starts_with(expected),
+        "{} did not start with {:?}",
+        path.display(),
+        expected
+    );
+}
+
 fn node_id_by_path(envelope: &Value, path: &[&str]) -> String {
     let expected = json!(path);
     envelope["data"]["nodes"]
@@ -56,6 +66,11 @@ fn help_json_output_uses_result_envelope() {
     assert_eq!(envelope["schema_version"], "1.0.0");
     assert_eq!(envelope["operation_id"], "help");
     assert!(envelope["data"]["commands"].is_array());
+    assert!(envelope["data"]["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|command| command["name"] == "render"));
 }
 
 #[test]
@@ -563,6 +578,223 @@ fn mindmap_cli_reads_mutates_confirms_and_serializes_markdown() {
     assert!(!final_markdown.contains("Renamed detail"));
     assert!(final_markdown.contains("## Alpha"));
     assert!(final_markdown.contains("## Beta"));
+}
+
+#[test]
+fn render_cli_exports_all_formats_with_json_envelopes() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(
+        workspace.join("plan.md"),
+        "# Plan\n\n## Alpha\n\n### Detail\n\n## Beta\n",
+    )
+    .unwrap();
+
+    for (format, output_path, prefix) in [
+        ("svg", "plan.svg", b"<?xml".as_slice()),
+        ("png", "plan.png", b"\x89PNG\r\n\x1a\n".as_slice()),
+        ("pdf", "plan.pdf", b"%PDF-".as_slice()),
+        ("markdown", "plan.export.md", b"# Plan".as_slice()),
+    ] {
+        let (_, rendered) = json_output(&[
+            "--json",
+            "render",
+            "./plan.md",
+            "--format",
+            format,
+            "--output",
+            output_path,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--app-data-dir",
+            data_dir.to_str().unwrap(),
+            "--app-config-dir",
+            config_dir.to_str().unwrap(),
+            "--non-interactive",
+        ]);
+
+        assert_eq!(rendered["ok"], true, "{format}: {rendered:#}");
+        assert_eq!(rendered["operation_id"], "render");
+        assert_eq!(rendered["data"]["format"], format);
+        assert_eq!(rendered["data"]["outputPath"], output_path);
+        assert!(rendered["data"]["artifact"]["byteSize"].as_u64().unwrap() > 0);
+        assert_file_prefix(&workspace.join(output_path), prefix);
+    }
+
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        "# Plan\n\n## Alpha\n\n### Detail\n\n## Beta\n"
+    );
+}
+
+#[test]
+fn render_cli_exports_branch_markdown_by_node_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(
+        workspace.join("plan.md"),
+        "# Plan\n\n## Alpha\n\n### Detail\n\n## Beta\n",
+    )
+    .unwrap();
+
+    let (_, rendered) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "markdown",
+        "--scope",
+        "branch",
+        "--node-path",
+        "Plan/Alpha",
+        "--output",
+        "alpha.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(rendered["ok"], true);
+    assert_eq!(rendered["data"]["scope"]["kind"], "branch");
+    assert_eq!(rendered["data"]["scope"]["renderedNodeCount"], 2);
+    assert_eq!(
+        fs::read_to_string(workspace.join("alpha.md")).unwrap(),
+        "- Alpha\n  - Detail\n"
+    );
+}
+
+#[test]
+fn render_cli_refuses_existing_output_without_overwrite_or_token() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("plan.md"), "# Plan\n").unwrap();
+    fs::write(workspace.join("plan.svg"), "old").unwrap();
+
+    let (probe_output, probe) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "render",
+        "plan.md",
+        "--format",
+        "svg",
+        "--output",
+        "plan.svg",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(probe_output.status.code(), Some(30));
+    assert_eq!(probe["error"]["code"], "confirmation_required");
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.svg")).unwrap(),
+        "old"
+    );
+    let token = probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, confirmed) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "svg",
+        "--output",
+        "plan.svg",
+        "--confirm-token",
+        token,
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(confirmed["ok"], true);
+    assert!(fs::read_to_string(workspace.join("plan.svg"))
+        .unwrap()
+        .starts_with("<?xml"));
+}
+
+#[test]
+fn render_cli_returns_typed_errors_for_bad_inputs() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("plan.md"), "# Plan\n").unwrap();
+
+    let (format_output, format_error) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "txt",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(format_output.status.code(), Some(10));
+    assert_eq!(format_error["error"]["code"], "invalid_output_format");
+
+    let (missing_output, missing_error) = json_output(&[
+        "--json",
+        "render",
+        "missing.md",
+        "--format",
+        "svg",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(missing_output.status.code(), Some(10));
+    assert_eq!(missing_error["error"]["code"], "file_not_found");
+
+    let (path_output, path_error) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "svg",
+        "--output",
+        "../plan.svg",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(path_output.status.code(), Some(10));
+    assert_eq!(path_error["error"]["code"], "invalid_relative_path");
+    assert_eq!(
+        path_error["error"]["details"]["exportCode"],
+        "invalid_output_path"
+    );
 }
 
 #[test]

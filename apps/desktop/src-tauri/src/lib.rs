@@ -7,6 +7,7 @@ pub mod commands;
 pub mod desktop_bridge;
 pub mod documents;
 pub mod errors;
+pub mod export_cli;
 pub mod file_index;
 pub mod fs_watch;
 pub mod git_contracts;

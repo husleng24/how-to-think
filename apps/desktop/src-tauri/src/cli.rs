@@ -6,6 +6,10 @@ use crate::command_service::{
     WorkspaceFileRenameRequest, WorkspaceFileSaveRequest, WorkspacePathRequest,
 };
 use crate::desktop_bridge::CliUiActionKind;
+use crate::export_cli::{
+    normalize_cli_relative_path, parse_render_export_format, parse_render_scope, RenderCliRequest,
+    RenderExportFormat, RenderExportScope,
+};
 use crate::links::model::{LinkKind, LinkReference};
 use crate::mindmap_cli::MindMapSiblingPosition;
 use crate::models::FileVersion;
@@ -57,6 +61,10 @@ pub struct CliOptions {
     pub position: MindMapSiblingPosition,
     pub child_ids: Vec<String>,
     pub template: Option<String>,
+    pub render_format: Option<RenderExportFormat>,
+    pub render_output_path: Option<String>,
+    pub render_scope: RenderExportScope,
+    pub overwrite: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +101,7 @@ pub enum CliCommand {
     MindMapDragLayout,
     MindMapHistoryUndo,
     MindMapHistoryRedo,
+    Render,
     UiOpen,
     UiFocus,
     UiReview,
@@ -176,6 +185,10 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut position = MindMapSiblingPosition::After;
     let mut child_ids = Vec::new();
     let mut template = None;
+    let mut render_format = None;
+    let mut render_output_path = None;
+    let mut render_scope = RenderExportScope::CurrentFile;
+    let mut overwrite = false;
     let mut command = None;
     let mut index = 0;
 
@@ -184,6 +197,22 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
             "--json" => {
                 output_mode = OutputMode::Json;
                 index += 1;
+            }
+            "--format" if is_render_command_context(command, args) => {
+                let value = required_value(args, index)?;
+                render_format =
+                    Some(
+                        parse_render_export_format(value).map_err(|message| CliParseError {
+                            code: CliErrorCode::InvalidOutputFormat,
+                            message,
+                        })?,
+                    );
+                index += 2;
+            }
+            "--output" if is_render_command_context(command, args) => {
+                let value = required_value(args, index)?;
+                render_output_path = Some(normalize_cli_relative_path(value));
+                index += 2;
             }
             "--format" | "--output" => {
                 let value = required_value(args, index)?;
@@ -362,6 +391,18 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 template = Some(value.to_owned());
                 index += 2;
             }
+            "--scope" => {
+                let value = required_value(args, index)?;
+                render_scope = parse_render_scope(value).map_err(|message| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message,
+                })?;
+                index += 2;
+            }
+            "--overwrite" => {
+                overwrite = true;
+                index += 1;
+            }
             "--help" | "-h" => {
                 command = set_command(command, CliCommand::Help)?;
                 index += 1;
@@ -375,6 +416,10 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                     code: CliErrorCode::InvalidArguments,
                     message: format!("Unknown flag `{value}`."),
                 });
+            }
+            value if command == Some(CliCommand::Render) && relative_path.is_none() => {
+                relative_path = Some(normalize_cli_relative_path(value));
+                index += 1;
             }
             value => {
                 command = set_command(command, parse_command(value)?)?;
@@ -418,6 +463,10 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         position,
         child_ids,
         template,
+        render_format,
+        render_output_path,
+        render_scope,
+        overwrite,
     })
 }
 
@@ -480,7 +529,8 @@ fn execute_options(options: CliOptions) -> CliExecution {
         | CliCommand::MindMapFitView
         | CliCommand::MindMapDragLayout
         | CliCommand::MindMapHistoryUndo
-        | CliCommand::MindMapHistoryRedo => match CommandServicePaths::resolve(
+        | CliCommand::MindMapHistoryRedo
+        | CliCommand::Render => match CommandServicePaths::resolve(
             options.app_data_dir.clone(),
             options.app_config_dir.clone(),
         ) {
@@ -686,6 +736,7 @@ fn command_envelope(
         | CliCommand::MindMapDragLayout => {
             Ok(service.request_desktop_ui(mindmap_ui_action_request(options)))
         }
+        CliCommand::Render => Ok(service.render_cli(render_request(options)?)),
         _ => Err(CliParseError {
             code: CliErrorCode::CommandUnavailable,
             message: format!(
@@ -717,6 +768,28 @@ fn mindmap_request(options: &CliOptions) -> Result<MindMapCliRequest, CliParseEr
         position: options.position,
         child_ids: options.child_ids.clone(),
         template: options.template.clone(),
+    })
+}
+
+fn render_request(options: &CliOptions) -> Result<RenderCliRequest, CliParseError> {
+    let source_relative_path = required_path(options)?;
+    Ok(RenderCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        source_relative_path,
+        output_relative_path: options.render_output_path.clone(),
+        format: options
+            .render_format
+            .ok_or_else(|| missing_flag("--format"))?,
+        scope: options.render_scope,
+        node_id: options.node_id.clone(),
+        node_path: options.node_path.clone(),
+        expected_version: options.expected_version.clone(),
+        confirmation_token: options.confirmation_token.clone(),
+        non_interactive: options.non_interactive,
+        overwrite: options.overwrite,
+        parse_mode: options.parse_mode,
+        line_ending: options.line_ending,
+        preservation_policy: options.preservation_policy,
     })
 }
 
@@ -927,6 +1000,7 @@ fn render_human_envelope_data(envelope: &CliResultEnvelope) -> String {
         | "mindmap.branch.move"
         | "mindmap.branch.delete"
         | "mindmap.siblings.reorder" => render_mindmap_mutation(data),
+        "render" => render_export_result(data),
         _ => serde_json::to_string_pretty(data).expect("CLI data must serialize"),
     }
 }
@@ -995,6 +1069,27 @@ fn render_mindmap_mutation(data: &Value) -> String {
         changed,
         data["diagnostics"].as_array().map_or(0, Vec::len)
     )
+}
+
+fn render_export_result(data: &Value) -> String {
+    let artifact = &data["artifact"];
+    let mut output = format!(
+        "Rendered {} to {}\nBytes: {}",
+        text(data, "sourceRelativePath"),
+        text(data, "outputPath"),
+        artifact["byteSize"].as_u64().unwrap_or_default()
+    );
+    if let (Some(width), Some(height)) = (artifact["width"].as_u64(), artifact["height"].as_u64()) {
+        output.push_str(&format!("\nDimensions: {}x{}", width, height));
+    }
+    if let Some(page_count) = artifact["pageCount"].as_u64() {
+        output.push_str(&format!("\nPages: {page_count}"));
+    }
+    let warning_count = data["warnings"].as_array().map_or(0, Vec::len);
+    if warning_count > 0 {
+        output.push_str(&format!("\nWarnings: {warning_count}"));
+    }
+    output
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
@@ -1081,6 +1176,7 @@ fn operation_id(command: CliCommand) -> &'static str {
         CliCommand::MindMapDragLayout => "mindmap.drag-layout",
         CliCommand::MindMapHistoryUndo => "mindmap.history.undo",
         CliCommand::MindMapHistoryRedo => "mindmap.history.redo",
+        CliCommand::Render => "render",
         CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => ui_operation_id(command),
     }
 }
@@ -1099,6 +1195,8 @@ fn render_help(data: &HelpData) -> String {
     for flag in &data.global_flags {
         output.push_str(&format!("  {:<24} {}\n", flag.name, flag.description));
     }
+    output.push_str("\nExamples:\n");
+    output.push_str("  how-to-think render ./ideas.md --format png --output ideas.png\n");
     output
 }
 
@@ -1193,6 +1291,7 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "mindmap.drag-layout" => Ok(CliCommand::MindMapDragLayout),
         "mindmap.history.undo" => Ok(CliCommand::MindMapHistoryUndo),
         "mindmap.history.redo" => Ok(CliCommand::MindMapHistoryRedo),
+        "render" | "export.render" => Ok(CliCommand::Render),
         "ui.open" => Ok(CliCommand::UiOpen),
         "ui.focus" => Ok(CliCommand::UiFocus),
         "ui.review" => Ok(CliCommand::UiReview),
@@ -1308,6 +1407,13 @@ fn requested_output_mode(args: &[String]) -> Option<OutputMode> {
     }
 
     None
+}
+
+fn is_render_command_context(command: Option<CliCommand>, args: &[String]) -> bool {
+    command == Some(CliCommand::Render)
+        || args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "render" | "export.render"))
 }
 
 fn required_value(args: &[String], index: usize) -> Result<&str, CliParseError> {

@@ -8,6 +8,7 @@ use crate::desktop_bridge::{
 };
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
+use crate::export_cli::{self, RenderCliRequest, RENDER_OPERATION_ID};
 use crate::links::index::WorkspaceLinkIndex;
 use crate::links::model::{LinkKind, LinkReference, ResolveLinksResponse};
 use crate::links::resolver;
@@ -469,6 +470,11 @@ impl CommandService {
                     description: "Reorder a node's existing children.",
                 },
                 HelpCommand {
+                    name: "render",
+                    description:
+                        "Render a Markdown mind map to svg, png, pdf, or markdown output.",
+                },
+                HelpCommand {
                     name: "ui.open",
                     description:
                         "Return a desktop UI handoff for an app, workspace, or file target.",
@@ -489,7 +495,13 @@ impl CommandService {
                 },
                 HelpFlag {
                     name: "--format <human|json>",
-                    description: "Select human or JSON output.",
+                    description:
+                        "Select human or JSON output; for render, select png, svg, pdf, or markdown.",
+                },
+                HelpFlag {
+                    name: "--output <relative-path>",
+                    description:
+                        "For render, write the export artifact to a workspace-relative path.",
                 },
                 HelpFlag {
                     name: "--workspace <path>",
@@ -554,6 +566,16 @@ impl CommandService {
                 HelpFlag {
                     name: "--child-ids <a,b>",
                     description: "Provide a comma-separated child order for reorder.",
+                },
+                HelpFlag {
+                    name: "--scope <file|branch>",
+                    description:
+                        "For render, export the whole file or a selected branch.",
+                },
+                HelpFlag {
+                    name: "--overwrite",
+                    description:
+                        "For render, explicitly replace an existing export artifact.",
                 },
                 HelpFlag {
                     name: "--reason <text>",
@@ -1141,6 +1163,59 @@ impl CommandService {
         let response: ResolveLinksResponse =
             resolver::resolve_links(&index, &request.source_relative_path, links);
         CliResultEnvelope::success(operation_id, response)
+    }
+
+    pub fn render_cli(&self, mut request: RenderCliRequest) -> CliResultEnvelope {
+        let operation_id = RENDER_OPERATION_ID;
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path.clone(), WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        request.source_relative_path = match validate_workspace_relative_path_for_operation(
+            &export_cli::normalize_cli_relative_path(&request.source_relative_path),
+            record.info.case_sensitive,
+            WorkspaceOperation::OpenFile,
+        ) {
+            Ok(path) => path,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let opened = match markdown_lifecycle::open_markdown_mind_map(
+            &record,
+            OpenMarkdownMindMapRequest {
+                workspace_id: record.info.id.clone(),
+                relative_path: request.source_relative_path.clone(),
+                parse_mode: request.parse_mode,
+            },
+        ) {
+            Ok(opened) => opened,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let expected_version = request
+            .expected_version
+            .clone()
+            .unwrap_or_else(|| opened.snapshot.version.clone());
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: CliGuardedOperation::Mutating,
+            workspace_path: Some(workspace_path.clone()),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: vec![request.source_relative_path.clone()],
+            expected_versions: vec![CliExpectedVersion {
+                relative_path: request.source_relative_path.clone(),
+                version: expected_version,
+            }],
+            confirmation_token: None,
+            non_interactive: request.non_interactive,
+            risks: Vec::new(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        export_cli::render_cli_export(&record, workspace_path, request, opened)
     }
 
     pub fn read_mindmap_cli(&self, request: MindMapCliRequest) -> CliResultEnvelope {

@@ -791,6 +791,14 @@ pub fn unsupported_persisted_state_error(action: &str) -> MindMapCliError {
     )
 }
 
+pub fn resolve_node_selector(
+    document: &MindMapDocument,
+    selector: &MindMapNodeSelector,
+    label: &str,
+) -> Result<String, MindMapCliError> {
+    resolve_node_id(document, selector, label)
+}
+
 fn validate_document(document: &MindMapDocument) -> Result<(), MindMapCliError> {
     if !document.nodes.contains_key(&document.root_node_id) {
         return Err(MindMapCliError::new(

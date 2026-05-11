@@ -25,6 +25,7 @@ The contract is implementation-neutral. It does not add an AI provider, Git back
 | Workspace and file lifecycle | `workspace.open`, `workspace.create`, `workspace.files.list`, `workspace.file.create`, `workspace.file.open`, `workspace.file.save`, `workspace.file.rename`, `workspace.file.delete` |
 | Mind map query and edit | `mindmap.read`, `mindmap.node.add`, `mindmap.node.update`, `mindmap.branch.move`, `mindmap.branch.delete`, `mindmap.history.undo`, `mindmap.history.redo` |
 | Markdown compatibility | `markdown.parse`, `markdown.serialize`, `markdown.links.resolve`, `markdown.links.create-target` |
+| Export and render | `render <markdown-file> --format <png\|svg\|pdf\|markdown> --output <relative-path>` |
 | AI chat and proposals | `ai.context.preview`, `ai.chat.send`, `ai.proposal.validate`, `ai.proposal.apply` |
 | Git status, history, and restore | `git.status`, `git.init`, `git.snapshot`, `git.history`, `git.diff`, `git.restore` |
 | Desktop UI handoff | `ui.open`, `ui.focus`, `ui.review` |
@@ -37,6 +38,7 @@ The typed matrix in `contract.ts` covers VIT-46, VIT-47, VIT-48, VIT-49, VIT-50,
 - VIT-46 mind map inspection and pure node edits are headless. Branch move/delete require confirmation. Canvas pan, zoom, focus, and gesture workflows wake the desktop UI or stay unsupported as CLI gestures.
 - VIT-47 workspace/file read and guarded save are headless. Rename/delete require confirmation. Dirty-state and external-conflict decisions wake the desktop review surface when no confirmation token is supplied.
 - VIT-48 parse, serialize, and link resolution are headless. Creating link targets requires confirmation. Ambiguous links and lossy Markdown review wake the UI.
+- VIT-104 render/export is headless for current-file scope and branch scope when `--node-id` or `--node-path` resolves deterministically. Existing output artifacts require `--overwrite` or the confirmation token returned by the first non-interactive attempt.
 - VIT-49 context preview and local AI chat are headless when provider configuration is valid. Provider setup and auth recovery wake the UI.
 - VIT-50 proposal validation is headless. Proposal apply requires confirmation, with a second confirmation class for multi-file changes. Automatic AI workspace rewrite is unsupported.
 - VIT-77 status, history, and diff are headless. Git init, snapshot, and restore require confirmation. Remote workflows, rebase, submodules, and LFS are unsupported in this CLI contract.
