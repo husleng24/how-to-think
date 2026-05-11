@@ -62,6 +62,7 @@ export const EXPORT_ERROR_CODES: Readonly<Record<string, ExportErrorCode>> = {
   RENDER_FAILED: 'render_failed',
   CONVERSION_FAILED: 'conversion_failed',
   WRITE_FAILED: 'write_failed',
+  EXPORT_CANCELLED: 'export_cancelled',
   CONFIRMATION_REQUIRED: 'confirmation_required',
   INTERNAL_EXPORT_ERROR: 'internal_export_error',
 };

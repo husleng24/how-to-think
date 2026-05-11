@@ -234,6 +234,7 @@ export type ExportErrorCode =
   | 'render_failed'
   | 'conversion_failed'
   | 'write_failed'
+  | 'export_cancelled'
   | 'confirmation_required'
   | 'internal_export_error';
 
@@ -253,6 +254,7 @@ export interface ExportArtifactMetadata {
   checksumSha256?: string;
   renderedNodeCount?: number;
   renderedEdgeCount?: number;
+  operationId?: string;
 }
 
 export type ExportResult =

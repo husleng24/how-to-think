@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, normalize } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
@@ -238,9 +238,7 @@ describe('MindMapRenderSnapshot contract', () => {
 
 async function readVit105Fixture(): Promise<SpikeRenderSnapshotFixture> {
   const fixturePath = join(
-    process.cwd(),
-    '..',
-    '..',
+    repoRoot(),
     'docs',
     'spikes',
     'export-renderer',
@@ -250,4 +248,9 @@ async function readVit105Fixture(): Promise<SpikeRenderSnapshotFixture> {
   const raw = await readFile(fixturePath, 'utf8');
 
   return JSON.parse(raw) as SpikeRenderSnapshotFixture;
+}
+
+function repoRoot(): string {
+  const cwd = normalize(process.cwd());
+  return cwd.endsWith(normalize('apps/desktop')) ? join(cwd, '..', '..') : cwd;
 }
