@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod ai_cli;
 pub mod atomic_write;
 pub mod cli;
 pub mod cli_guard;

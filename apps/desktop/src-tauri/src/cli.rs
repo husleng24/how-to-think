@@ -1,3 +1,9 @@
+use crate::ai::context::{AiContextLimits, AiContextScope, AiContextSnapshot, AiMindMapDocument};
+use crate::ai::session::AiConversationLimits;
+use crate::ai_cli::{
+    AiChatCliRequest, AiContextPreviewCliRequest, AiProposalApplyCliRequest,
+    AiProposalValidateCliRequest, AiProviderHealthCliRequest,
+};
 use crate::command_service::{
     CliErrorCode, CliResultEnvelope, CommandService, CommandServicePaths, DoctorCheckStatus,
     DoctorReport, DoctorRequest, HelpData, MarkdownLinksResolveCliRequest, MarkdownParseCliRequest,
@@ -25,7 +31,7 @@ pub enum OutputMode {
     Json,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CliOptions {
     pub command: CliCommand,
     pub output_mode: OutputMode,
@@ -65,6 +71,21 @@ pub struct CliOptions {
     pub render_output_path: Option<String>,
     pub render_scope: RenderExportScope,
     pub overwrite: bool,
+    pub provider_id: Option<String>,
+    pub session_id: Option<String>,
+    pub prompt: Option<String>,
+    pub context: Option<AiContextSnapshot>,
+    pub ai_context_scope: Option<AiContextScope>,
+    pub ai_document: Option<AiMindMapDocument>,
+    pub open_files: Vec<String>,
+    pub max_context_bytes: Option<usize>,
+    pub max_files: Option<usize>,
+    pub max_open_files: Option<usize>,
+    pub max_history_messages: Option<usize>,
+    pub max_history_bytes: Option<usize>,
+    pub content_revision: Option<u64>,
+    pub base_document_version: Option<u64>,
+    pub proposal: Option<Value>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +123,12 @@ pub enum CliCommand {
     MindMapHistoryUndo,
     MindMapHistoryRedo,
     Render,
+    AiProviderList,
+    AiProviderHealth,
+    AiContextPreview,
+    AiChatSend,
+    AiProposalValidate,
+    AiProposalApply,
     UiOpen,
     UiFocus,
     UiReview,
@@ -189,6 +216,21 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut render_output_path = None;
     let mut render_scope = RenderExportScope::CurrentFile;
     let mut overwrite = false;
+    let mut provider_id = None;
+    let mut session_id = None;
+    let mut prompt = None;
+    let mut context = None;
+    let mut ai_context_scope = None;
+    let mut ai_document = None;
+    let mut open_files = Vec::new();
+    let mut max_context_bytes = None;
+    let mut max_files = None;
+    let mut max_open_files = None;
+    let mut max_history_messages = None;
+    let mut max_history_bytes = None;
+    let mut content_revision = None;
+    let mut base_document_version = None;
+    let mut proposal = None;
     let mut command = None;
     let mut index = 0;
 
@@ -284,12 +326,32 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                     })?);
                 index += 2;
             }
+            "--document-json" if is_ai_command_context(command, args) => {
+                let value = required_any_value(args, index)?;
+                ai_document = Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!(
+                        "Flag `--document-json` must be AI mind map document JSON: {error}"
+                    ),
+                })?);
+                index += 2;
+            }
             "--document-json" => {
                 let value = required_any_value(args, index)?;
                 document = Some(serde_json::from_str(value).map_err(|error| CliParseError {
                     code: CliErrorCode::InvalidArguments,
                     message: format!(
                         "Flag `--document-json` must be MindMapDocument JSON: {error}"
+                    ),
+                })?);
+                index += 2;
+            }
+            "--ai-document-json" => {
+                let value = required_any_value(args, index)?;
+                ai_document = Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!(
+                        "Flag `--ai-document-json` must be AI mind map document JSON: {error}"
                     ),
                 })?);
                 index += 2;
@@ -391,7 +453,7 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 template = Some(value.to_owned());
                 index += 2;
             }
-            "--scope" => {
+            "--scope" if is_render_command_context(command, args) => {
                 let value = required_value(args, index)?;
                 render_scope = parse_render_scope(value).map_err(|message| CliParseError {
                     code: CliErrorCode::InvalidArguments,
@@ -399,9 +461,85 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 })?;
                 index += 2;
             }
+            "--scope" if is_ai_command_context(command, args) => {
+                let value = required_value(args, index)?;
+                ai_context_scope = Some(parse_ai_context_scope(value)?);
+                index += 2;
+            }
+            "--scope" => {
+                let value = required_value(args, index)?;
+                ai_context_scope = Some(parse_ai_context_scope(value)?);
+                index += 2;
+            }
             "--overwrite" => {
                 overwrite = true;
                 index += 1;
+            }
+            "--provider" | "--provider-id" => {
+                let value = required_value(args, index)?;
+                provider_id = Some(value.to_owned());
+                index += 2;
+            }
+            "--session" | "--session-id" => {
+                let value = required_value(args, index)?;
+                session_id = Some(value.to_owned());
+                index += 2;
+            }
+            "--prompt" => {
+                let value = required_any_value(args, index)?;
+                prompt = Some(value.to_owned());
+                index += 2;
+            }
+            "--context-json" => {
+                let value = required_any_value(args, index)?;
+                context = Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!(
+                        "Flag `--context-json` must be AiContextSnapshot JSON: {error}"
+                    ),
+                })?);
+                index += 2;
+            }
+            "--proposal-json" => {
+                let value = required_any_value(args, index)?;
+                proposal = Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!("Flag `--proposal-json` must be proposal JSON: {error}"),
+                })?);
+                index += 2;
+            }
+            "--open-files" => {
+                let value = required_any_value(args, index)?;
+                open_files = parse_string_list(value)?;
+                index += 2;
+            }
+            "--max-context-bytes" => {
+                max_context_bytes = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--max-files" => {
+                max_files = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--max-open-files" => {
+                max_open_files = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--max-history-messages" => {
+                max_history_messages = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--max-history-bytes" => {
+                max_history_bytes = Some(parse_usize_flag(args, index)?);
+                index += 2;
+            }
+            "--content-revision" => {
+                content_revision = Some(parse_u64_flag(args, index)?);
+                index += 2;
+            }
+            "--base-document-version" => {
+                base_document_version = Some(parse_u64_flag(args, index)?);
+                index += 2;
             }
             "--help" | "-h" => {
                 command = set_command(command, CliCommand::Help)?;
@@ -467,6 +605,21 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         render_output_path,
         render_scope,
         overwrite,
+        provider_id,
+        session_id,
+        prompt,
+        context,
+        ai_context_scope,
+        ai_document,
+        open_files,
+        max_context_bytes,
+        max_files,
+        max_open_files,
+        max_history_messages,
+        max_history_bytes,
+        content_revision,
+        base_document_version,
+        proposal,
     })
 }
 
@@ -530,7 +683,13 @@ fn execute_options(options: CliOptions) -> CliExecution {
         | CliCommand::MindMapDragLayout
         | CliCommand::MindMapHistoryUndo
         | CliCommand::MindMapHistoryRedo
-        | CliCommand::Render => match CommandServicePaths::resolve(
+        | CliCommand::Render
+        | CliCommand::AiProviderList
+        | CliCommand::AiProviderHealth
+        | CliCommand::AiContextPreview
+        | CliCommand::AiChatSend
+        | CliCommand::AiProposalValidate
+        | CliCommand::AiProposalApply => match CommandServicePaths::resolve(
             options.app_data_dir.clone(),
             options.app_config_dir.clone(),
         ) {
@@ -737,6 +896,22 @@ fn command_envelope(
             Ok(service.request_desktop_ui(mindmap_ui_action_request(options)))
         }
         CliCommand::Render => Ok(service.render_cli(render_request(options)?)),
+        CliCommand::AiProviderList => Ok(service.list_ai_providers_cli()),
+        CliCommand::AiProviderHealth => Ok(service.check_ai_provider_health_cli(
+            AiProviderHealthCliRequest {
+                provider_id: options.provider_id.clone(),
+            },
+        )),
+        CliCommand::AiContextPreview => {
+            Ok(service.preview_ai_context_cli(ai_context_request(options)))
+        }
+        CliCommand::AiChatSend => Ok(service.send_ai_chat_cli(ai_chat_request(options)?)),
+        CliCommand::AiProposalValidate => {
+            Ok(service.validate_ai_proposal_cli(ai_proposal_validate_request(options)?))
+        }
+        CliCommand::AiProposalApply => {
+            Ok(service.apply_ai_proposal_cli(ai_proposal_apply_request(options)?))
+        }
         _ => Err(CliParseError {
             code: CliErrorCode::CommandUnavailable,
             message: format!(
@@ -790,6 +965,98 @@ fn render_request(options: &CliOptions) -> Result<RenderCliRequest, CliParseErro
         parse_mode: options.parse_mode,
         line_ending: options.line_ending,
         preservation_policy: options.preservation_policy,
+    })
+}
+
+fn ai_context_request(options: &CliOptions) -> AiContextPreviewCliRequest {
+    AiContextPreviewCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        scope: options.ai_context_scope,
+        current_file: options.relative_path.clone(),
+        open_files: options.open_files.clone(),
+        selected_node_id: options.node_id.clone(),
+        document: options.ai_document.clone(),
+        content_revision: options.content_revision,
+        limits: ai_context_limits(options),
+    }
+}
+
+fn ai_chat_request(options: &CliOptions) -> Result<AiChatCliRequest, CliParseError> {
+    let prompt = options
+        .prompt
+        .clone()
+        .or_else(|| options.content.clone())
+        .ok_or_else(|| missing_flag("--prompt"))?;
+    Ok(AiChatCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        provider_id: options.provider_id.clone(),
+        session_id: options.session_id.clone(),
+        prompt,
+        context: options.context.clone(),
+        context_request: ai_context_request(options),
+        limits: ai_conversation_limits(options),
+    })
+}
+
+fn ai_proposal_validate_request(
+    options: &CliOptions,
+) -> Result<AiProposalValidateCliRequest, CliParseError> {
+    Ok(AiProposalValidateCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        proposal: required_proposal(options)?,
+        base_document_version: options.base_document_version,
+        active_file_path: options.relative_path.clone(),
+    })
+}
+
+fn ai_proposal_apply_request(
+    options: &CliOptions,
+) -> Result<AiProposalApplyCliRequest, CliParseError> {
+    Ok(AiProposalApplyCliRequest {
+        workspace_path: options.workspace_path.clone(),
+        proposal: required_proposal(options)?,
+        base_document_version: options.base_document_version,
+        active_file_path: options.relative_path.clone(),
+        confirmation_token: options.confirmation_token.clone(),
+        non_interactive: options.non_interactive,
+    })
+}
+
+fn ai_context_limits(options: &CliOptions) -> AiContextLimits {
+    let mut limits = AiContextLimits::default();
+    if let Some(value) = options.max_context_bytes {
+        limits.max_context_bytes = value;
+    }
+    if let Some(value) = options.max_files {
+        limits.max_files = value;
+    }
+    if let Some(value) = options.max_open_files {
+        limits.max_open_files = value;
+    }
+    limits
+}
+
+fn ai_conversation_limits(options: &CliOptions) -> AiConversationLimits {
+    let mut limits = AiConversationLimits::default();
+    if let Some(value) = options.max_history_messages {
+        limits.max_history_messages = value;
+    }
+    if let Some(value) = options.max_history_bytes {
+        limits.max_history_bytes = value;
+    }
+    limits
+}
+
+fn required_proposal(options: &CliOptions) -> Result<Value, CliParseError> {
+    if let Some(proposal) = &options.proposal {
+        return Ok(proposal.clone());
+    }
+    let Some(content) = &options.content else {
+        return Err(missing_flag("--proposal-json"));
+    };
+    serde_json::from_str(content).map_err(|error| CliParseError {
+        code: CliErrorCode::InvalidArguments,
+        message: format!("Flag `--proposal-json` must be proposal JSON: {error}"),
     })
 }
 
@@ -1001,6 +1268,11 @@ fn render_human_envelope_data(envelope: &CliResultEnvelope) -> String {
         | "mindmap.branch.delete"
         | "mindmap.siblings.reorder" => render_mindmap_mutation(data),
         "render" => render_export_result(data),
+        "ai.provider.list" => render_ai_provider_list(data),
+        "ai.provider.health" => render_ai_provider_health(data),
+        "ai.context.preview" => render_ai_context_preview(data),
+        "ai.chat.send" => render_ai_chat_response(data),
+        "ai.proposal.validate" => render_ai_proposal_validation(data),
         _ => serde_json::to_string_pretty(data).expect("CLI data must serialize"),
     }
 }
@@ -1092,6 +1364,70 @@ fn render_export_result(data: &Value) -> String {
     output
 }
 
+fn render_ai_provider_list(data: &Value) -> String {
+    let mut output = String::new();
+    if let Some(active) = data["activeProviderId"].as_str() {
+        output.push_str(&format!("Active provider: {active}\n"));
+    }
+    output.push_str("AI providers:\n");
+    for provider in data["providers"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "  {:<24} {}{}\n",
+            text(provider, "id"),
+            text(provider, "displayName"),
+            if provider["enabled"].as_bool().unwrap_or(false) {
+                ""
+            } else {
+                " (disabled)"
+            }
+        ));
+    }
+    output
+}
+
+fn render_ai_provider_health(data: &Value) -> String {
+    let status = &data["status"];
+    format!(
+        "Provider {}: {}\n{}",
+        text(data, "providerId"),
+        text(status, "status"),
+        text(status, "message")
+    )
+}
+
+fn render_ai_context_preview(data: &Value) -> String {
+    format!(
+        "AI context: {}\nItems: {}\nBytes: {}\nTokens: {}\nWarnings: {}",
+        text(data, "displayLabel"),
+        data["items"].as_array().map_or(0, Vec::len),
+        data["byteEstimate"].as_u64().unwrap_or_default(),
+        data["tokenEstimate"].as_u64().unwrap_or_default(),
+        data["warnings"].as_array().map_or(0, Vec::len)
+    )
+}
+
+fn render_ai_chat_response(data: &Value) -> String {
+    data["assistantMessage"]["content"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| format!("AI run status: {}", text(&data["run"], "status")))
+}
+
+fn render_ai_proposal_validation(data: &Value) -> String {
+    if data["validation"]["ok"].as_bool().unwrap_or(false) {
+        format!(
+            "AI proposal valid\nAffected files: {}\nRisk flags: {}",
+            data["affectedFiles"].as_array().map_or(0, Vec::len),
+            data["riskFlags"].as_array().map_or(0, Vec::len)
+        )
+    } else {
+        format!(
+            "AI proposal invalid\nErrors: {}",
+            data["validation"]["errors"].as_array().map_or(0, Vec::len)
+        )
+    }
+}
+
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap_or("")
 }
@@ -1177,6 +1513,12 @@ fn operation_id(command: CliCommand) -> &'static str {
         CliCommand::MindMapHistoryUndo => "mindmap.history.undo",
         CliCommand::MindMapHistoryRedo => "mindmap.history.redo",
         CliCommand::Render => "render",
+        CliCommand::AiProviderList => "ai.provider.list",
+        CliCommand::AiProviderHealth => "ai.provider.health",
+        CliCommand::AiContextPreview => "ai.context.preview",
+        CliCommand::AiChatSend => "ai.chat.send",
+        CliCommand::AiProposalValidate => "ai.proposal.validate",
+        CliCommand::AiProposalApply => "ai.proposal.apply",
         CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => ui_operation_id(command),
     }
 }
@@ -1292,6 +1634,12 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "mindmap.history.undo" => Ok(CliCommand::MindMapHistoryUndo),
         "mindmap.history.redo" => Ok(CliCommand::MindMapHistoryRedo),
         "render" | "export.render" => Ok(CliCommand::Render),
+        "ai.provider.list" | "ai.providers.list" => Ok(CliCommand::AiProviderList),
+        "ai.provider.health" | "ai.provider.check" => Ok(CliCommand::AiProviderHealth),
+        "ai.context.preview" | "ai.context" => Ok(CliCommand::AiContextPreview),
+        "ai.chat.send" | "ai.ask" | "ai.chat" => Ok(CliCommand::AiChatSend),
+        "ai.proposal.validate" => Ok(CliCommand::AiProposalValidate),
+        "ai.proposal.apply" => Ok(CliCommand::AiProposalApply),
         "ui.open" => Ok(CliCommand::UiOpen),
         "ui.focus" => Ok(CliCommand::UiFocus),
         "ui.review" => Ok(CliCommand::UiReview),
@@ -1367,6 +1715,21 @@ fn parse_mindmap_position(value: &str) -> Result<MindMapSiblingPosition, CliPars
     }
 }
 
+fn parse_ai_context_scope(value: &str) -> Result<AiContextScope, CliParseError> {
+    match value {
+        "selected-node" | "selected_node" | "node" => Ok(AiContextScope::SelectedNode),
+        "selected-branch" | "selected_branch" | "branch" => Ok(AiContextScope::SelectedBranch),
+        "current-file" | "current_file" | "file" => Ok(AiContextScope::CurrentFile),
+        "workspace-summary" | "workspace_summary" | "workspace" => {
+            Ok(AiContextScope::WorkspaceSummary)
+        }
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported AI context scope `{value}`."),
+        }),
+    }
+}
+
 fn parse_child_ids(value: &str) -> Result<Vec<String>, CliParseError> {
     let child_ids = value
         .split(',')
@@ -1381,6 +1744,44 @@ fn parse_child_ids(value: &str) -> Result<Vec<String>, CliParseError> {
         });
     }
     Ok(child_ids)
+}
+
+fn parse_string_list(value: &str) -> Result<Vec<String>, CliParseError> {
+    let values = value
+        .split(',')
+        .map(str::trim)
+        .filter(|item| !item.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: "List flag must include at least one value.".to_owned(),
+        });
+    }
+    Ok(values)
+}
+
+fn parse_usize_flag(args: &[String], index: usize) -> Result<usize, CliParseError> {
+    let value = required_value(args, index)?;
+    value.parse::<usize>().map_err(|error| CliParseError {
+        code: CliErrorCode::InvalidArguments,
+        message: format!(
+            "Flag `{}` must be a non-negative integer: {error}",
+            args[index]
+        ),
+    })
+}
+
+fn parse_u64_flag(args: &[String], index: usize) -> Result<u64, CliParseError> {
+    let value = required_value(args, index)?;
+    value.parse::<u64>().map_err(|error| CliParseError {
+        code: CliErrorCode::InvalidArguments,
+        message: format!(
+            "Flag `{}` must be a non-negative integer: {error}",
+            args[index]
+        ),
+    })
 }
 
 fn parse_output_mode(value: &str) -> Result<OutputMode, CliParseError> {
@@ -1414,6 +1815,35 @@ fn is_render_command_context(command: Option<CliCommand>, args: &[String]) -> bo
         || args
             .iter()
             .any(|arg| matches!(arg.as_str(), "render" | "export.render"))
+}
+
+fn is_ai_command_context(command: Option<CliCommand>, args: &[String]) -> bool {
+    matches!(
+        command,
+        Some(
+            CliCommand::AiProviderList
+                | CliCommand::AiProviderHealth
+                | CliCommand::AiContextPreview
+                | CliCommand::AiChatSend
+                | CliCommand::AiProposalValidate
+                | CliCommand::AiProposalApply
+        )
+    ) || args.iter().any(|arg| {
+        matches!(
+            arg.as_str(),
+            "ai.provider.list"
+                | "ai.providers.list"
+                | "ai.provider.health"
+                | "ai.provider.check"
+                | "ai.context.preview"
+                | "ai.context"
+                | "ai.chat.send"
+                | "ai.chat"
+                | "ai.ask"
+                | "ai.proposal.validate"
+                | "ai.proposal.apply"
+        )
+    })
 }
 
 fn required_value(args: &[String], index: usize) -> Result<&str, CliParseError> {

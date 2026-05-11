@@ -1,4 +1,14 @@
-use crate::ai::providers::{AiProviderSettings, AiProviderStore, AI_PROVIDER_SETTINGS_FILE};
+use crate::ai::errors::{AiError, AiErrorCode};
+use crate::ai::providers::{
+    check_provider_health, AiProviderError, AiProviderErrorCode, AiProviderSettings,
+    AiProviderStore, AI_PROVIDER_SETTINGS_FILE,
+};
+use crate::ai::runner::{run_ai_conversation, AiRuntimeState};
+use crate::ai::session::AiConversationRequest;
+use crate::ai_cli::{
+    self, AiChatCliRequest, AiContextPreviewCliRequest, AiProposalApplyCliRequest,
+    AiProposalValidateCliRequest, AiProviderHealthCliRequest, AiProviderHealthCliResult,
+};
 use crate::cli_guard::{
     evaluate_cli_preflight, CliExpectedVersion, CliGuardBlockCode, CliGuardedOperation,
     CliPreflightDecision, CliPreflightRequest,
@@ -475,6 +485,31 @@ impl CommandService {
                         "Render a Markdown mind map to svg, png, pdf, or markdown output.",
                 },
                 HelpCommand {
+                    name: "ai.provider.list",
+                    description: "List configured local AI providers.",
+                },
+                HelpCommand {
+                    name: "ai.provider.health",
+                    description: "Run a health check for the active or selected AI provider.",
+                },
+                HelpCommand {
+                    name: "ai.context.preview",
+                    description: "Build a bounded AI context snapshot for a workspace scope.",
+                },
+                HelpCommand {
+                    name: "ai.chat.send",
+                    description: "Send a prompt to the active local AI provider with context.",
+                },
+                HelpCommand {
+                    name: "ai.proposal.validate",
+                    description: "Validate a normalized AI change proposal without applying it.",
+                },
+                HelpCommand {
+                    name: "ai.proposal.apply",
+                    description:
+                        "Validate and hand an AI proposal to the guarded desktop review flow.",
+                },
+                HelpCommand {
                     name: "ui.open",
                     description:
                         "Return a desktop UI handoff for an app, workspace, or file target.",
@@ -576,6 +611,30 @@ impl CommandService {
                     name: "--overwrite",
                     description:
                         "For render, explicitly replace an existing export artifact.",
+                },
+                HelpFlag {
+                    name: "--provider <id>",
+                    description: "Select a configured AI provider id for AI commands.",
+                },
+                HelpFlag {
+                    name: "--session <id>",
+                    description: "Provide an AI chat session id for the current CLI run.",
+                },
+                HelpFlag {
+                    name: "--prompt <text>",
+                    description: "Provide the user prompt for ai.chat.send.",
+                },
+                HelpFlag {
+                    name: "--context-json <json>",
+                    description: "Provide a prebuilt AI context snapshot for ai.chat.send.",
+                },
+                HelpFlag {
+                    name: "--proposal-json <json>",
+                    description: "Provide a normalized AI proposal for proposal commands.",
+                },
+                HelpFlag {
+                    name: "--max-context-bytes <n>",
+                    description: "Bound generated AI context snapshot size.",
                 },
                 HelpFlag {
                     name: "--reason <text>",
@@ -1163,6 +1222,233 @@ impl CommandService {
         let response: ResolveLinksResponse =
             resolver::resolve_links(&index, &request.source_relative_path, links);
         CliResultEnvelope::success(operation_id, response)
+    }
+
+    pub fn list_ai_providers_cli(&self) -> CliResultEnvelope {
+        let operation_id = "ai.provider.list";
+        match provider_settings_store(&self.paths.app_config_dir).load() {
+            Ok(settings) => {
+                CliResultEnvelope::success(operation_id, ai_cli::provider_list_result(settings))
+            }
+            Err(error) => ai_provider_error_envelope(operation_id, error),
+        }
+    }
+
+    pub fn check_ai_provider_health_cli(
+        &self,
+        request: AiProviderHealthCliRequest,
+    ) -> CliResultEnvelope {
+        let operation_id = "ai.provider.health";
+        let store = provider_settings_store(&self.paths.app_config_dir);
+        let mut settings = match store.load() {
+            Ok(settings) => settings,
+            Err(error) => return ai_provider_error_envelope(operation_id, error),
+        };
+        let provider =
+            match ai_cli::resolve_provider_for_cli(&settings, request.provider_id.as_deref()) {
+                Ok(provider) => provider,
+                Err(message) => {
+                    return CliResultEnvelope::error(
+                        operation_id,
+                        CliErrorCode::ProviderNotConfigured,
+                        message,
+                    )
+                }
+            };
+        let status = check_provider_health(&provider);
+        if let Some(stored_provider) = settings
+            .providers
+            .iter_mut()
+            .find(|stored_provider| stored_provider.id == provider.id)
+        {
+            stored_provider.last_health_status = Some(status.clone());
+            if let Err(error) = store.save(&settings) {
+                return ai_provider_error_envelope(operation_id, error);
+            }
+        }
+        let status_value = serde_json::to_value(status).unwrap_or(Value::Null);
+        CliResultEnvelope::success(
+            operation_id,
+            AiProviderHealthCliResult {
+                provider_id: provider.id,
+                status: status_value,
+            },
+        )
+    }
+
+    pub fn preview_ai_context_cli(&self, request: AiContextPreviewCliRequest) -> CliResultEnvelope {
+        let operation_id = "ai.context.preview";
+        let (record, _) = match self.record_for_cli_workspace(
+            request.workspace_path.clone(),
+            WorkspaceOperation::BuildAiContext,
+        ) {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        match ai_cli::build_context_for_cli(&record, request) {
+            Ok(snapshot) => CliResultEnvelope::success(operation_id, snapshot),
+            Err(error) => CliResultEnvelope::from_workspace_error(operation_id, error),
+        }
+    }
+
+    pub fn send_ai_chat_cli(&self, request: AiChatCliRequest) -> CliResultEnvelope {
+        let operation_id = "ai.chat.send";
+        let context = match request.context {
+            Some(context) => context,
+            None => {
+                let (record, _) = match self.record_for_cli_workspace(
+                    request.context_request.workspace_path.clone(),
+                    WorkspaceOperation::BuildAiContext,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        return CliResultEnvelope::from_workspace_error(operation_id, error)
+                    }
+                };
+                match ai_cli::build_context_for_cli(&record, request.context_request) {
+                    Ok(context) => context,
+                    Err(error) => {
+                        return CliResultEnvelope::from_workspace_error(operation_id, error)
+                    }
+                }
+            }
+        };
+        let settings = match provider_settings_store(&self.paths.app_config_dir).load() {
+            Ok(settings) => settings,
+            Err(error) => return ai_provider_error_envelope(operation_id, error),
+        };
+        let provider =
+            match ai_cli::resolve_provider_for_cli(&settings, request.provider_id.as_deref()) {
+                Ok(provider) => provider,
+                Err(message) => {
+                    return CliResultEnvelope::error(
+                        operation_id,
+                        CliErrorCode::ProviderNotConfigured,
+                        message,
+                    )
+                }
+            };
+        let response = run_ai_conversation(
+            &AiRuntimeState::default(),
+            provider,
+            AiConversationRequest {
+                workspace_id: context.workspace_id.clone(),
+                session_id: request.session_id,
+                provider_id: request.provider_id,
+                document_id: context.document_id.clone(),
+                document_path: context.document_path.clone(),
+                prompt: request.prompt,
+                context,
+                limits: request.limits,
+            },
+            |_| {},
+        );
+
+        match response {
+            Ok(response) => {
+                if let Some(error) = response.error.clone() {
+                    ai_error_envelope_with_diagnostics(
+                        operation_id,
+                        error,
+                        response.diagnostics.as_ref(),
+                    )
+                } else {
+                    CliResultEnvelope::success(operation_id, response)
+                }
+            }
+            Err(error) => ai_error_envelope(operation_id, error),
+        }
+    }
+
+    pub fn validate_ai_proposal_cli(
+        &self,
+        request: AiProposalValidateCliRequest,
+    ) -> CliResultEnvelope {
+        let operation_id = "ai.proposal.validate";
+        let (record, _) = match self.record_for_cli_workspace(
+            request.workspace_path.clone(),
+            WorkspaceOperation::BuildAiContext,
+        ) {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        match ai_cli::validate_proposal_for_cli(&record, request) {
+            Ok(outcome) => CliResultEnvelope::success(operation_id, outcome.result),
+            Err(error) => CliResultEnvelope::from_workspace_error(operation_id, error),
+        }
+    }
+
+    pub fn apply_ai_proposal_cli(&self, request: AiProposalApplyCliRequest) -> CliResultEnvelope {
+        let operation_id = "ai.proposal.apply";
+        let (record, workspace_path) = match self
+            .record_for_cli_workspace(request.workspace_path.clone(), WorkspaceOperation::SaveFile)
+        {
+            Ok(value) => value,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        let outcome = match ai_cli::validate_proposal_for_cli(
+            &record,
+            AiProposalValidateCliRequest {
+                workspace_path: request.workspace_path,
+                proposal: request.proposal,
+                base_document_version: request.base_document_version,
+                active_file_path: request.active_file_path,
+            },
+        ) {
+            Ok(outcome) => outcome,
+            Err(error) => return CliResultEnvelope::from_workspace_error(operation_id, error),
+        };
+        if !outcome.result.validation.ok {
+            let mut envelope = CliResultEnvelope::error(
+                operation_id,
+                CliErrorCode::ValidationError,
+                "AI proposal failed validation.",
+            );
+            if let Some(error) = &mut envelope.error {
+                error.details = details([("validation", json!(outcome.result.validation))]);
+            }
+            return envelope;
+        }
+
+        let preflight = self.preflight(CliPreflightRequest {
+            command_id: operation_id.to_owned(),
+            operation: if outcome.requires_multi_file_confirmation {
+                CliGuardedOperation::MultiFileChange
+            } else {
+                CliGuardedOperation::AiApply
+            },
+            workspace_path: Some(workspace_path),
+            workspace_id: Some(record.info.id.clone()),
+            relative_paths: outcome.affected_paths.clone(),
+            expected_versions: outcome
+                .expected_versions
+                .iter()
+                .map(|(relative_path, version)| CliExpectedVersion {
+                    relative_path: relative_path.clone(),
+                    version: version.clone(),
+                })
+                .collect(),
+            confirmation_token: request.confirmation_token,
+            non_interactive: request.non_interactive,
+            risks: outcome.risks.clone(),
+            ui_action: None,
+        });
+        if !preflight.ok {
+            return preflight;
+        }
+
+        self.request_desktop_ui(UiActionRequest {
+            command_id: operation_id.to_owned(),
+            kind: CliUiActionKind::OpenReviewSurface,
+            target: format!(
+                "workspace:{}/proposal:{}/files:{}",
+                record.info.id,
+                outcome.proposal_id,
+                outcome.affected_paths.join(",")
+            ),
+            reason: "Review and apply the confirmed AI proposal in the desktop UI.".to_owned(),
+            non_interactive: request.non_interactive,
+        })
     }
 
     pub fn render_cli(&self, mut request: RenderCliRequest) -> CliResultEnvelope {
@@ -2038,6 +2324,70 @@ fn mindmap_error_envelope(
     )
 }
 
+fn ai_provider_error_envelope(
+    operation_id: impl Into<String>,
+    error: AiProviderError,
+) -> CliResultEnvelope {
+    let mut envelope = CliResultEnvelope::error(
+        operation_id,
+        cli_error_code_for_ai_provider_error(error.code),
+        error.message,
+    );
+    if let Some(cli_error) = &mut envelope.error {
+        let mut details = BTreeMap::new();
+        details.insert(
+            "aiProviderCode".to_owned(),
+            json!(format!("{:?}", error.code)),
+        );
+        if let Some(field) = error.field {
+            details.insert("field".to_owned(), json!(field));
+        }
+        if let Some(detail) = error.detail {
+            details.insert("detail".to_owned(), json!(detail));
+        }
+        cli_error.details = Some(details);
+    }
+    envelope
+}
+
+fn ai_error_envelope(operation_id: impl Into<String>, error: AiError) -> CliResultEnvelope {
+    ai_error_envelope_with_diagnostics(operation_id, error, None)
+}
+
+fn ai_error_envelope_with_diagnostics(
+    operation_id: impl Into<String>,
+    error: AiError,
+    diagnostics: Option<&crate::ai::session::AiRunDiagnostics>,
+) -> CliResultEnvelope {
+    let mut envelope = CliResultEnvelope::error(
+        operation_id,
+        cli_error_code_for_ai_error(error.code),
+        error.message.clone(),
+    );
+    if let Some(cli_error) = &mut envelope.error {
+        let mut details = BTreeMap::new();
+        details.insert("aiCode".to_owned(), json!(format!("{:?}", error.code)));
+        details.insert("guidance".to_owned(), json!(error.guidance));
+        if let Some(provider_id) = error.provider_id {
+            details.insert("providerId".to_owned(), json!(provider_id));
+        }
+        if let Some(run_id) = error.run_id {
+            details.insert("runId".to_owned(), json!(run_id));
+        }
+        if let Some(exit_code) = error.exit_code {
+            details.insert("exitCode".to_owned(), json!(exit_code));
+        }
+        if let Some(detail) = error.detail {
+            details.insert("detail".to_owned(), json!(detail));
+        }
+        if let Some(diagnostics) = diagnostics {
+            details.insert("diagnostics".to_owned(), json!(diagnostics));
+        }
+        cli_error.details = Some(details);
+    }
+    envelope
+}
+
 fn cli_error_code_for_mindmap_error(code: MindMapCliErrorCode) -> CliErrorCode {
     match code {
         MindMapCliErrorCode::InvalidArguments => CliErrorCode::InvalidArguments,
@@ -2050,6 +2400,42 @@ fn cli_error_code_for_mindmap_error(code: MindMapCliErrorCode) -> CliErrorCode {
         | MindMapCliErrorCode::InvalidSiblingOrder
         | MindMapCliErrorCode::CannotMoveIntoDescendant
         | MindMapCliErrorCode::ValidationError => CliErrorCode::ValidationError,
+    }
+}
+
+fn cli_error_code_for_ai_provider_error(code: AiProviderErrorCode) -> CliErrorCode {
+    match code {
+        AiProviderErrorCode::ProviderNotFound => CliErrorCode::ProviderNotConfigured,
+        AiProviderErrorCode::ProviderDisabled => CliErrorCode::ProviderUnavailable,
+        AiProviderErrorCode::PersistenceFailed | AiProviderErrorCode::RuntimeUnavailable => {
+            CliErrorCode::BackendUnavailable
+        }
+        AiProviderErrorCode::MissingExecutable
+        | AiProviderErrorCode::NonExecutablePath
+        | AiProviderErrorCode::ShellCommandString
+        | AiProviderErrorCode::UnsafeWorkingDirectory
+        | AiProviderErrorCode::InvalidProviderId
+        | AiProviderErrorCode::InvalidDisplayName
+        | AiProviderErrorCode::InvalidArguments
+        | AiProviderErrorCode::InvalidEnvironmentAllowlist
+        | AiProviderErrorCode::InvalidTimeout
+        | AiProviderErrorCode::InvalidOutputLimit => CliErrorCode::ValidationError,
+    }
+}
+
+fn cli_error_code_for_ai_error(code: AiErrorCode) -> CliErrorCode {
+    match code {
+        AiErrorCode::InvalidRequest => CliErrorCode::InvalidArguments,
+        AiErrorCode::ProviderNotConfigured => CliErrorCode::ProviderNotConfigured,
+        AiErrorCode::RuntimeUnavailable => CliErrorCode::BackendUnavailable,
+        AiErrorCode::ProviderDisabled
+        | AiErrorCode::ProviderConfigInvalid
+        | AiErrorCode::ProviderUnavailable
+        | AiErrorCode::ProviderTimedOut
+        | AiErrorCode::ProviderCancelled
+        | AiErrorCode::ProviderNonZeroExit
+        | AiErrorCode::ProviderOutputMalformed
+        | AiErrorCode::ProviderOutputTooLarge => CliErrorCode::ProviderUnavailable,
     }
 }
 

@@ -1,6 +1,12 @@
 use serde_json::{json, Value};
+use std::env;
 use std::fs;
 use std::process::{Command, Output};
+
+const MOCK_PROVIDER_SCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../scripts/mock-ai-provider.mjs"
+);
 
 fn cli_output(args: &[&str]) -> Output {
     Command::new(env!("CARGO_BIN_EXE_how-to-think"))
@@ -43,6 +49,54 @@ fn node_id_by_path(envelope: &Value, path: &[&str]) -> String {
         .and_then(|node| node["id"].as_str())
         .expect("node path should exist in mindmap output")
         .to_owned()
+}
+
+fn write_mock_provider_settings(config_dir: &std::path::Path) {
+    fs::create_dir_all(config_dir).unwrap();
+    fs::write(
+        config_dir.join("ai-providers.json"),
+        serde_json::to_vec_pretty(&json!({
+            "activeProviderId": "mock-provider",
+            "providers": [
+                {
+                    "id": "mock-provider",
+                    "displayName": "Mock AI Provider",
+                    "kind": "generic",
+                    "executablePath": node_executable(),
+                    "argumentTemplate": [MOCK_PROVIDER_SCRIPT, "success"],
+                    "healthCheckArgs": [MOCK_PROVIDER_SCRIPT, "health"],
+                    "timeoutSeconds": 5,
+                    "maxOutputBytes": 65536,
+                    "enabled": true
+                }
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn node_executable() -> String {
+    if let Ok(path) = env::var("HTT_NODE") {
+        return path;
+    }
+
+    let candidates: &[&str] = if cfg!(windows) {
+        &["node.exe", "node.cmd", "node.bat"]
+    } else {
+        &["node"]
+    };
+
+    for directory in env::split_paths(&env::var_os("PATH").unwrap_or_default()) {
+        for name in candidates {
+            let candidate = directory.join(name);
+            if candidate.is_file() {
+                return candidate.display().to_string();
+            }
+        }
+    }
+
+    panic!("Node.js is required to run the mock AI provider fixture");
 }
 
 #[test]
@@ -794,6 +848,202 @@ fn render_cli_returns_typed_errors_for_bad_inputs() {
     assert_eq!(
         path_error["error"]["details"]["exportCode"],
         "invalid_output_path"
+    );
+}
+
+#[test]
+fn ai_cli_previews_context_sends_chat_and_guards_proposal_apply() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::write(workspace.join("plan.md"), "# Plan\n\n## Alpha\n\n## Beta\n").unwrap();
+    write_mock_provider_settings(&config_dir);
+
+    let (_, providers) = json_output(&[
+        "--json",
+        "ai.provider.list",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(providers["ok"], true);
+    assert_eq!(providers["data"]["activeProviderId"], "mock-provider");
+
+    let (_, health) = json_output(&[
+        "--json",
+        "ai.provider.health",
+        "--provider",
+        "mock-provider",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(health["ok"], true);
+    assert_eq!(health["data"]["status"]["status"], "ok");
+
+    let (_, context) = json_output(&[
+        "--json",
+        "ai.context.preview",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--scope",
+        "current-file",
+        "--max-context-bytes",
+        "4096",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(context["ok"], true);
+    assert_eq!(context["data"]["scope"], "currentFile");
+    assert!(context["data"]["items"][0]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Raw Markdown"));
+
+    let (_, chat) = json_output(&[
+        "--json",
+        "ai.chat.send",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--scope",
+        "current-file",
+        "--prompt",
+        "Summarize the plan",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(chat["ok"], true, "{chat:#}");
+    assert!(chat["data"]["assistantMessage"]["content"]
+        .as_str()
+        .unwrap()
+        .contains("Latest prompt: Summarize the plan"));
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        "# Plan\n\n## Alpha\n\n## Beta\n"
+    );
+
+    let (_, opened) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    let (_, read) = json_output(&[
+        "--json",
+        "mindmap.read",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    let alpha_id = node_id_by_path(&read, &["Plan", "Alpha"]);
+    let proposal = serde_json::to_string(&json!({
+        "proposalId": "proposal-cli",
+        "sourceConversationId": "session-cli",
+        "createdAt": "2026-05-10T00:00:00Z",
+        "targetScope": { "type": "current-file", "filePath": "plan.md" },
+        "baseDocumentVersion": 1,
+        "affectedFiles": [
+            {
+                "path": "plan.md",
+                "baseFileVersion": { "token": opened["data"]["version"]["token"] },
+                "changeKind": "modify"
+            }
+        ],
+        "operations": [
+            {
+                "type": "update-node",
+                "operationId": "op-rename-alpha",
+                "targetFilePath": "plan.md",
+                "nodeId": alpha_id,
+                "text": "Renamed Alpha"
+            }
+        ],
+        "summary": "Rename Alpha"
+    }))
+    .unwrap();
+
+    let (_, validated) = json_output(&[
+        "--json",
+        "ai.proposal.validate",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--proposal-json",
+        &proposal,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(validated["ok"], true, "{validated:#}");
+    assert_eq!(validated["data"]["validation"]["ok"], true);
+    assert_eq!(
+        validated["data"]["proposal"]["reviewMode"],
+        "whole-proposal"
+    );
+
+    let (apply_probe_output, apply_probe) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "ai.proposal.apply",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--proposal-json",
+        &proposal,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(apply_probe_output.status.code(), Some(30));
+    assert_eq!(apply_probe["error"]["code"], "confirmation_required");
+    assert_eq!(apply_probe["needs_confirmation"]["kind"], "ai_apply");
+    let token = apply_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (confirmed_output, confirmed) = json_output(&[
+        "--json",
+        "ai.proposal.apply",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--proposal-json",
+        &proposal,
+        "--confirm-token",
+        token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(confirmed_output.status.code(), Some(50));
+    assert_eq!(confirmed["error"]["code"], "ui_required");
+    assert_eq!(confirmed["ui_action"]["kind"], "open_review_surface");
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        "# Plan\n\n## Alpha\n\n## Beta\n"
     );
 }
 
