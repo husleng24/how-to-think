@@ -1,0 +1,471 @@
+{
+  "schemaVersion": 1,
+  "contractVersion": "2026-05-10.v1",
+  "resultSchemaVersion": "1.0.0",
+  "generatedForIssue": "VIT-103",
+  "allowedDispositions": [
+    "headless_cli_supported",
+    "cli_supported_with_confirmation",
+    "cli_wakes_desktop_ui",
+    "intentionally_unsupported"
+  ],
+  "commands": [
+    {
+      "command": "help",
+      "operationId": "help",
+      "group": "diagnostics",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-96", "VIT-103"],
+      "testCoverage": ["cli_smoke::help_human_output_succeeds", "cli_smoke::help_json_output_uses_result_envelope"],
+      "safety": "Read-only command registry output."
+    },
+    {
+      "command": "version",
+      "operationId": "version",
+      "group": "diagnostics",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-96", "VIT-103"],
+      "testCoverage": ["cli_smoke::version_human_and_json_outputs_succeed"],
+      "safety": "Read-only version and contract output."
+    },
+    {
+      "command": "doctor",
+      "operationId": "diagnostics.doctor",
+      "group": "diagnostics",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-96", "VIT-103"],
+      "testCoverage": ["cli_smoke::doctor_human_and_json_outputs_succeed_with_explicit_settings_dirs"],
+      "safety": "Read-only diagnostics against explicit app data, config, and workspace paths."
+    },
+    {
+      "command": "workspace.open",
+      "operationId": "workspace.open",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards"],
+      "safety": "Records an explicitly supplied workspace path in the selected config directory."
+    },
+    {
+      "command": "workspace.create",
+      "operationId": "workspace.create",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Creates only the explicitly supplied workspace directory."
+    },
+    {
+      "command": "workspace.validate",
+      "operationId": "workspace.validate",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Read-only workspace path validation."
+    },
+    {
+      "command": "workspace.recent.list",
+      "operationId": "workspace.recent.list",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Read-only settings inspection."
+    },
+    {
+      "command": "workspace.files.list",
+      "operationId": "workspace.files.list",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards"],
+      "safety": "Read-only Markdown file index listing."
+    },
+    {
+      "command": "workspace.files.refresh",
+      "operationId": "workspace.files.refresh",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Refreshes in-memory/file-index metadata without changing workspace content."
+    },
+    {
+      "command": "workspace.file.create",
+      "operationId": "workspace.file.create",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards"],
+      "safety": "Path guard rejects absolute paths, traversal, unsupported extensions, and collisions."
+    },
+    {
+      "command": "workspace.file.open",
+      "operationId": "workspace.file.open",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards", "cli_smoke::invalid_path_and_invalid_utf8_return_typed_json_errors"],
+      "safety": "Read-only file snapshot with version token."
+    },
+    {
+      "command": "workspace.file.save",
+      "operationId": "workspace.file.save",
+      "group": "workspace-file",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards", "cli_smoke::json_exit_code_contract_covers_core_error_classes"],
+      "safety": "Requires expected file version and reruns stale/external-change preflight."
+    },
+    {
+      "command": "workspace.file.rename",
+      "operationId": "workspace.file.rename",
+      "group": "workspace-file",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards"],
+      "safety": "Requires confirmation token and version/path preflight before rename."
+    },
+    {
+      "command": "workspace.file.delete",
+      "operationId": "workspace.file.delete",
+      "group": "workspace-file",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-47", "VIT-103"],
+      "testCoverage": ["cli_smoke::workspace_file_lifecycle_json_uses_shared_guards", "cli_smoke::json_exit_code_contract_covers_core_error_classes"],
+      "safety": "Requires confirmation token and version/path preflight before delete."
+    },
+    {
+      "command": "markdown.parse",
+      "operationId": "markdown.parse",
+      "group": "markdown",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-48", "VIT-103"],
+      "testCoverage": ["cli_smoke::markdown_parse_and_link_resolution_json_report_diagnostics"],
+      "safety": "Read-only parser diagnostics from content or workspace file."
+    },
+    {
+      "command": "markdown.check",
+      "operationId": "markdown.check",
+      "group": "markdown",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-48", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Read-only compatibility check from content or workspace file."
+    },
+    {
+      "command": "markdown.serialize",
+      "operationId": "markdown.serialize",
+      "group": "markdown",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-48", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Returns serializer preview; does not write files."
+    },
+    {
+      "command": "markdown.links.resolve",
+      "operationId": "markdown.links.resolve",
+      "group": "markdown",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-48", "VIT-103"],
+      "testCoverage": ["cli_smoke::markdown_parse_and_link_resolution_json_report_diagnostics"],
+      "safety": "Read-only link resolution with ambiguous and unsafe targets reported as diagnostics."
+    },
+    {
+      "command": "mindmap.read",
+      "operationId": "mindmap.read",
+      "group": "mindmap",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Read-only Markdown-to-mind-map projection."
+    },
+    {
+      "command": "mindmap.create",
+      "operationId": "mindmap.create",
+      "group": "mindmap",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Creates a Markdown file through workspace path guards."
+    },
+    {
+      "command": "mindmap.node.add",
+      "operationId": "mindmap.node.add",
+      "group": "mindmap",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Requires expected version and valid parent selector before saving."
+    },
+    {
+      "command": "mindmap.node.update",
+      "operationId": "mindmap.node.update",
+      "group": "mindmap",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Requires expected version and valid node selector before saving."
+    },
+    {
+      "command": "mindmap.branch.move",
+      "operationId": "mindmap.branch.move",
+      "group": "mindmap",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Cycle checks run before confirmation; mutation reruns version preflight."
+    },
+    {
+      "command": "mindmap.branch.delete",
+      "operationId": "mindmap.branch.delete",
+      "group": "mindmap",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_smoke::mindmap_cli_reads_mutates_confirms_and_serializes_markdown"],
+      "safety": "Requires destructive mind map confirmation and version preflight."
+    },
+    {
+      "command": "mindmap.siblings.reorder",
+      "operationId": "mindmap.siblings.reorder",
+      "group": "mindmap",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Requires explicit sibling order and version preflight."
+    },
+    {
+      "command": "mindmap.collapse",
+      "operationId": "mindmap.collapse",
+      "group": "mindmap",
+      "disposition": "intentionally_unsupported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "Collapsed state is desktop viewport state and is not persisted in Markdown."
+    },
+    {
+      "command": "mindmap.expand",
+      "operationId": "mindmap.expand",
+      "group": "mindmap",
+      "disposition": "intentionally_unsupported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "Expanded state is desktop viewport state and is not persisted in Markdown."
+    },
+    {
+      "command": "mindmap.focus-node",
+      "operationId": "mindmap.focus-node",
+      "group": "mindmap",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "Returns a UI handoff instead of changing canvas state headlessly."
+    },
+    {
+      "command": "mindmap.fit-view",
+      "operationId": "mindmap.fit-view",
+      "group": "mindmap",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "Returns a UI handoff instead of changing viewport state headlessly."
+    },
+    {
+      "command": "mindmap.drag-layout",
+      "operationId": "mindmap.drag-layout",
+      "group": "mindmap",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "Returns a review handoff because drag gestures are not a CLI surface."
+    },
+    {
+      "command": "mindmap.history.undo",
+      "operationId": "mindmap.history.undo",
+      "group": "mindmap",
+      "disposition": "intentionally_unsupported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "UI command history is not persisted in Markdown and cannot be replayed by CLI."
+    },
+    {
+      "command": "mindmap.history.redo",
+      "operationId": "mindmap.history.redo",
+      "group": "mindmap",
+      "disposition": "intentionally_unsupported",
+      "sourceIssues": ["VIT-46", "VIT-103"],
+      "testCoverage": ["cli_contract::unsupported_and_ui_only_commands_return_documented_envelopes"],
+      "safety": "UI command history is not persisted in Markdown and cannot be replayed by CLI."
+    },
+    {
+      "command": "render",
+      "operationId": "render",
+      "group": "export-render",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-104", "VIT-103"],
+      "testCoverage": ["cli_smoke::render_cli_exports_all_formats_with_json_envelopes", "cli_smoke::render_cli_refuses_existing_output_without_overwrite_or_token"],
+      "safety": "Writes only workspace-relative artifacts; existing outputs require overwrite or confirmation."
+    },
+    {
+      "command": "git.detect",
+      "operationId": "git.detect",
+      "group": "git",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Read-only local repository probe."
+    },
+    {
+      "command": "git.init",
+      "operationId": "git.init",
+      "group": "git",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Initializes local Git metadata only after confirmation."
+    },
+    {
+      "command": "git.status",
+      "operationId": "git.status",
+      "group": "git",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Read-only normalized status output."
+    },
+    {
+      "command": "git.refresh",
+      "operationId": "git.refresh",
+      "group": "git",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Read-only status refresh and blocked-state reporting."
+    },
+    {
+      "command": "git.snapshot",
+      "operationId": "git.snapshot",
+      "group": "git",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Stages eligible local changes and commits only after confirmation and stale-token checks."
+    },
+    {
+      "command": "git.history",
+      "operationId": "git.history",
+      "group": "git",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Read-only local commit history output."
+    },
+    {
+      "command": "git.diff",
+      "operationId": "git.diff",
+      "group": "git",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Read-only local diff output with bounded metadata."
+    },
+    {
+      "command": "git.restore",
+      "operationId": "git.restore",
+      "group": "git",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::git_cli_runs_local_snapshot_history_diff_and_restore_flow"],
+      "safety": "Restores historical content as a new working-tree change after confirmation."
+    },
+    {
+      "command": "ai.provider.list",
+      "operationId": "ai.provider.list",
+      "group": "ai",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-49", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply"],
+      "safety": "Read-only provider settings listing."
+    },
+    {
+      "command": "ai.provider.health",
+      "operationId": "ai.provider.health",
+      "group": "ai",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-49", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply", "cli_smoke::json_exit_code_contract_covers_core_error_classes"],
+      "safety": "Runs only the configured local provider health command; missing providers return unavailable envelopes."
+    },
+    {
+      "command": "ai.context.preview",
+      "operationId": "ai.context.preview",
+      "group": "ai",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-49", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply"],
+      "safety": "Read-only bounded context assembly."
+    },
+    {
+      "command": "ai.chat.send",
+      "operationId": "ai.chat.send",
+      "group": "ai",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-49", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply"],
+      "safety": "Uses explicit context scope and configured local provider; does not mutate files."
+    },
+    {
+      "command": "ai.proposal.validate",
+      "operationId": "ai.proposal.validate",
+      "group": "ai",
+      "disposition": "headless_cli_supported",
+      "sourceIssues": ["VIT-50", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply"],
+      "safety": "Validates proposal JSON and impact without writing files."
+    },
+    {
+      "command": "ai.proposal.apply",
+      "operationId": "ai.proposal.apply",
+      "group": "ai",
+      "disposition": "cli_supported_with_confirmation",
+      "sourceIssues": ["VIT-50", "VIT-103"],
+      "testCoverage": ["cli_smoke::ai_cli_previews_context_sends_chat_and_guards_proposal_apply"],
+      "safety": "Requires AI apply confirmation and hands visual review to desktop before mutation."
+    },
+    {
+      "command": "ui.open",
+      "operationId": "ui.open",
+      "group": "desktop-bridge",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-46", "VIT-47", "VIT-49", "VIT-50", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Returns a UI handoff envelope; terminal does not bypass desktop review."
+    },
+    {
+      "command": "ui.focus",
+      "operationId": "ui.focus",
+      "group": "desktop-bridge",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-46", "VIT-47", "VIT-103"],
+      "testCoverage": ["cli_contract::coverage_matrix_matches_registered_cli_commands"],
+      "safety": "Returns a UI handoff envelope for focus targets."
+    },
+    {
+      "command": "ui.review",
+      "operationId": "ui.review",
+      "group": "desktop-bridge",
+      "disposition": "cli_wakes_desktop_ui",
+      "sourceIssues": ["VIT-47", "VIT-48", "VIT-50", "VIT-77", "VIT-102", "VIT-103"],
+      "testCoverage": ["cli_smoke::ui_review_json_returns_structured_handoff_without_prompting", "cli_smoke::json_exit_code_contract_covers_core_error_classes"],
+      "safety": "Returns a review handoff for dirty state, lossy Markdown, AI proposal, Git, and conflict decisions."
+    }
+  ],
+  "nonGoals": [
+    "No shell completion in the first native CLI version.",
+    "No package-manager publishing in the first native CLI version.",
+    "No remote service API or cloud automation platform.",
+    "No bypass of desktop review or confirmation.",
+    "No full GUI replacement, high-frequency gesture automation, or frontend Git history/diff/restore UI."
+  ]
+}

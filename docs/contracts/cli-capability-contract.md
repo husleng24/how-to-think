@@ -4,6 +4,7 @@
 - Date: 2026-05-10
 - Canonical app path: `apps/desktop/`
 - Machine-readable source: `apps/desktop/src/features/cli-contract/`
+- Native CLI coverage metadata: `apps/desktop/docs/native-cli-capability-matrix.json`
 
 This contract defines what the future CLI may do headlessly, what requires explicit confirmation, what wakes the desktop UI, and what is intentionally outside CLI scope. It also defines the stable result envelope, warnings, error codes, exit-code classes, confirmation behavior, and reusable fixtures for downstream command implementations.
 
@@ -22,18 +23,18 @@ The contract is implementation-neutral. It does not add an AI provider, Git back
 
 | Group | Commands |
 | --- | --- |
-| Workspace and file lifecycle | `workspace.open`, `workspace.create`, `workspace.files.list`, `workspace.file.create`, `workspace.file.open`, `workspace.file.save`, `workspace.file.rename`, `workspace.file.delete` |
-| Mind map query and edit | `mindmap.read`, `mindmap.node.add`, `mindmap.node.update`, `mindmap.branch.move`, `mindmap.branch.delete`, `mindmap.history.undo`, `mindmap.history.redo` |
-| Markdown compatibility | `markdown.parse`, `markdown.serialize`, `markdown.links.resolve`, `markdown.links.create-target` |
+| Diagnostics and help | `help`, `version`, `doctor` |
+| Workspace and file lifecycle | `workspace.open`, `workspace.create`, `workspace.validate`, `workspace.recent.list`, `workspace.files.list`, `workspace.files.refresh`, `workspace.file.create`, `workspace.file.open`, `workspace.file.save`, `workspace.file.rename`, `workspace.file.delete` |
+| Mind map query and edit | `mindmap.read`, `mindmap.create`, `mindmap.node.add`, `mindmap.node.update`, `mindmap.branch.move`, `mindmap.branch.delete`, `mindmap.siblings.reorder`, `mindmap.collapse`, `mindmap.expand`, `mindmap.focus-node`, `mindmap.fit-view`, `mindmap.drag-layout`, `mindmap.history.undo`, `mindmap.history.redo` |
+| Markdown compatibility | `markdown.parse`, `markdown.check`, `markdown.serialize`, `markdown.links.resolve` |
 | Export and render | `render <markdown-file> --format <png\|svg\|pdf\|markdown> --output <relative-path>` |
-| AI chat and proposals | `ai.context.preview`, `ai.chat.send`, `ai.proposal.validate`, `ai.proposal.apply` |
-| Git status, history, and restore | `git.status`, `git.init`, `git.snapshot`, `git.history`, `git.diff`, `git.restore` |
+| AI chat and proposals | `ai.provider.list`, `ai.provider.health`, `ai.context.preview`, `ai.chat.send`, `ai.proposal.validate`, `ai.proposal.apply` |
+| Git status, history, and restore | `git.detect`, `git.init`, `git.status`, `git.refresh`, `git.snapshot`, `git.history`, `git.diff`, `git.restore` |
 | Desktop UI handoff | `ui.open`, `ui.focus`, `ui.review` |
-| Diagnostics and help | `diagnostics.doctor`, `help`, `contract.print` |
 
 ## Coverage Matrix
 
-The typed matrix in `contract.ts` covers VIT-46, VIT-47, VIT-48, VIT-49, VIT-50, VIT-77, and VIT-96. Important boundaries:
+The typed matrix in `contract.ts` covers VIT-46, VIT-47, VIT-48, VIT-49, VIT-50, VIT-77, and VIT-96. The native CLI matrix in `apps/desktop/docs/native-cli-capability-matrix.json` tracks the concrete Rust command registry and is checked by `cargo test`. Important boundaries:
 
 - VIT-46 mind map inspection and pure node edits are headless. Branch move/delete require confirmation. Canvas pan, zoom, focus, and gesture workflows wake the desktop UI or stay unsupported as CLI gestures.
 - VIT-47 workspace/file read and guarded save are headless. Rename/delete require confirmation. Dirty-state and external-conflict decisions wake the desktop review surface when no confirmation token is supplied.
@@ -42,6 +43,7 @@ The typed matrix in `contract.ts` covers VIT-46, VIT-47, VIT-48, VIT-49, VIT-50,
 - VIT-49 context preview and local AI chat are headless when provider configuration is valid. Provider setup and auth recovery wake the UI.
 - VIT-50 proposal validation is headless. Proposal apply requires confirmation, with a second confirmation class for multi-file changes. Automatic AI workspace rewrite is unsupported.
 - VIT-77 status, history, and diff are headless. Git init, snapshot, and restore require confirmation. Remote workflows, rebase, submodules, and LFS are unsupported in this CLI contract.
+- VIT-103 validates the native CLI registry, command coverage metadata, JSON envelopes, exit-code classes, local Git flow, mock AI provider flow, desktop handoff, and user/operator documentation.
 
 ## Result Envelope
 

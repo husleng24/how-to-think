@@ -82,4 +82,6 @@ For local AI assistant provider setup, context/privacy behavior, mock-provider v
 
 For deterministic AI proposal review/apply regression coverage and manual safety checks, follow `apps/desktop/docs/ai-proposal-review-apply-verification.md`.
 
+For native CLI command coverage, JSON envelope behavior, confirmation/UI handoff rules, platform binary locations, and operator examples, follow `apps/desktop/docs/native-cli-operator-guide.md`. The machine-readable native CLI coverage list is `apps/desktop/docs/native-cli-capability-matrix.json`.
+
 The scaffold is intentionally isolated under `apps/desktop/` so future `packages/*` and `crates/*` work can be added without coupling to the initial shell.

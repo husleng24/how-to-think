@@ -497,6 +497,10 @@ impl CommandService {
                     description: "Parse Markdown and return compatibility diagnostics.",
                 },
                 HelpCommand {
+                    name: "markdown.check",
+                    description: "Check Markdown compatibility and return diagnostics.",
+                },
+                HelpCommand {
                     name: "markdown.serialize",
                     description: "Preview serializer output for Markdown or a mind map document.",
                 },
@@ -531,6 +535,34 @@ impl CommandService {
                 HelpCommand {
                     name: "mindmap.siblings.reorder",
                     description: "Reorder a node's existing children.",
+                },
+                HelpCommand {
+                    name: "mindmap.collapse",
+                    description: "Report that collapsed state is desktop-only state.",
+                },
+                HelpCommand {
+                    name: "mindmap.expand",
+                    description: "Report that expanded state is desktop-only state.",
+                },
+                HelpCommand {
+                    name: "mindmap.focus-node",
+                    description: "Return a desktop UI handoff for focusing a node.",
+                },
+                HelpCommand {
+                    name: "mindmap.fit-view",
+                    description: "Return a desktop UI handoff for fitting the current map.",
+                },
+                HelpCommand {
+                    name: "mindmap.drag-layout",
+                    description: "Return a desktop review handoff for layout gestures.",
+                },
+                HelpCommand {
+                    name: "mindmap.history.undo",
+                    description: "Report that UI command history is not persisted for CLI undo.",
+                },
+                HelpCommand {
+                    name: "mindmap.history.redo",
+                    description: "Report that UI command history is not persisted for CLI redo.",
                 },
                 HelpCommand {
                     name: "render",

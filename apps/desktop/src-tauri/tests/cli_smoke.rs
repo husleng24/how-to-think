@@ -1355,6 +1355,134 @@ fn ai_cli_previews_context_sends_chat_and_guards_proposal_apply() {
 }
 
 #[test]
+fn json_exit_code_contract_covers_core_error_classes() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let assert_contract_error = |output: &Output, envelope: &Value, exit_code, code| {
+        assert_eq!(output.status.code(), Some(exit_code), "{envelope:#}");
+        assert_eq!(envelope["ok"], false);
+        assert_eq!(envelope["contract_version"], "2026-05-10.v1");
+        assert_eq!(envelope["schema_version"], "1.0.0");
+        assert!(envelope["data"].is_null());
+        assert!(envelope["error"].is_object());
+        assert_eq!(envelope["error"]["code"], code);
+    };
+
+    let (success_output, success) = json_output(&["--json", "version"]);
+    assert!(success_output.status.success(), "{success:#}");
+    assert_eq!(success["ok"], true);
+    assert_eq!(success["contract_version"], "2026-05-10.v1");
+    assert_eq!(success["schema_version"], "1.0.0");
+    assert_eq!(success["operation_id"], "version");
+
+    let (validation_output, validation) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "../outside.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_contract_error(&validation_output, &validation, 10, "invalid_relative_path");
+
+    fs::write(workspace.join("plan.md"), "# Plan\n").unwrap();
+    let (_, opened) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    let stale_version = serde_json::to_string(&opened["data"]["version"]).unwrap();
+    fs::write(workspace.join("plan.md"), "# Changed elsewhere\n").unwrap();
+    let (conflict_output, conflict) = json_output(&[
+        "--json",
+        "workspace.file.save",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--content",
+        "# Proposed save\n",
+        "--expected-version",
+        &stale_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_contract_error(&conflict_output, &conflict, 20, "external_state_changed");
+
+    let (confirmation_output, confirmation) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "workspace.file.delete",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_contract_error(
+        &confirmation_output,
+        &confirmation,
+        30,
+        "confirmation_required",
+    );
+    assert_eq!(
+        confirmation["needs_confirmation"]["non_interactive"],
+        "return_confirmation_required"
+    );
+
+    let (unavailable_output, unavailable) = json_output(&[
+        "--json",
+        "ai.provider.health",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_contract_error(
+        &unavailable_output,
+        &unavailable,
+        40,
+        "provider_not_configured",
+    );
+
+    let (ui_output, ui_required) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "ui.review",
+        "--target",
+        "workspace:workspace-1/file:plan.md",
+        "--reason",
+        "Review pending changes.",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_contract_error(&ui_output, &ui_required, 50, "ui_required");
+    assert_eq!(ui_required["ui_action"]["kind"], "open_review_surface");
+}
+
+#[test]
 fn invalid_path_and_invalid_utf8_return_typed_json_errors() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("workspace");
