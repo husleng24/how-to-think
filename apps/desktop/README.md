@@ -45,10 +45,19 @@ npm run tauri:build
 
 ## Git Backend Commands
 
-The desktop shell exposes read-only Git history and diff commands through Tauri:
+The desktop shell exposes local Git enablement, status, snapshot, history, diff,
+and restore commands through Tauri:
 
+- `git_init_repository` enables Git for a selected local workspace when no
+  repository is present.
+- `git_refresh` and `git_status` report repository state, changed Markdown
+  files, blocked states, and external-change tokens.
+- `git_create_snapshot` commits eligible local Markdown changes as a local
+  snapshot after validating repository and file versions.
 - `git_history` accepts a `GitHistoryRequest` for whole-workspace history or a single workspace-relative path. File history uses `git log --follow` for one selected path, so rename following is available where system Git can resolve it.
 - `git_diff` accepts a `GitDiffRequest` for `working_tree`, `staged`, or `ref_range` comparisons. Markdown file changes return structured file, hunk, and line DTOs; binary and unsupported resource changes return metadata only.
+- `git_restore_file` restores a Markdown file from history as a pending working
+  tree change without moving `HEAD` or committing automatically.
 
 Diff responses are bounded by backend byte, file, hunk, and line limits and include explicit truncation metadata when content is omitted.
 
@@ -81,6 +90,8 @@ For local-first workspace lifecycle verification, follow `apps/desktop/docs/loca
 For local AI assistant provider setup, context/privacy behavior, mock-provider validation, and manual Codex/Claude QA, follow `apps/desktop/docs/ai-assistant-operator-guide.md`.
 
 For deterministic AI proposal review/apply regression coverage and manual safety checks, follow `apps/desktop/docs/ai-proposal-review-apply-verification.md`.
+
+For local Git version snapshots, restore behavior, blocked states, platform caveats, and validation commands, follow `apps/desktop/docs/local-git-workflow.md`.
 
 For native CLI command coverage, JSON envelope behavior, confirmation/UI handoff rules, platform binary locations, and operator examples, follow `apps/desktop/docs/native-cli-operator-guide.md`. The machine-readable native CLI coverage list is `apps/desktop/docs/native-cli-capability-matrix.json`.
 

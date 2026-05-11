@@ -9,6 +9,7 @@ import type {
   GitRepositoryState,
   GitRepositoryStateToken,
   GitRestoreResult,
+  GitSnapshotResult,
   GitStatusSummary,
 } from '../git-service';
 import type {
@@ -25,6 +26,75 @@ import type {
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 
 describe('GitWorkflowPanel history workflow', () => {
+  it('enables local Git from an explicit confirmation when the workspace is not a repository', async () => {
+    const enableGit = vi.fn().mockResolvedValue(true);
+    const actions = workspaceActions({ enableGit });
+
+    render(
+      <GitWorkflowPanel
+        workspaceState={workspaceState({ repositoryState: 'not_repository' })}
+        workspaceActions={actions}
+      />,
+    );
+
+    expect(screen.getByText('Git is off for this workspace')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /^enable git$/i }));
+
+    const dialog = await screen.findByRole('dialog', { name: /enable git/i });
+    expect(within(dialog).getByText(/existing file contents will not be changed/i)).toBeVisible();
+    fireEvent.click(within(dialog).getByRole('button', { name: /confirm enable git/i }));
+
+    await waitFor(() => expect(enableGit).toHaveBeenCalledTimes(1));
+  });
+
+  it('creates a local snapshot from eligible Markdown changes and ignores ignored files', async () => {
+    const result = snapshotResult();
+    const createGitSnapshot = vi.fn().mockResolvedValue({ ok: true, result });
+    const actions = workspaceActions({ createGitSnapshot });
+
+    render(
+      <GitWorkflowPanel
+        workspaceState={workspaceState({
+          entries: [
+            {
+              relativePath: 'notes/plan.md',
+              staged: 'unmodified',
+              unstaged: 'modified',
+              conflicted: false,
+            },
+            {
+              relativePath: 'notes/new.md',
+              staged: 'untracked',
+              unstaged: 'untracked',
+              conflicted: false,
+            },
+            {
+              relativePath: 'notes/ignored.md',
+              staged: 'ignored',
+              unstaged: 'ignored',
+              conflicted: false,
+            },
+          ],
+        })}
+        workspaceActions={actions}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /create snapshot/i }));
+    const dialog = await screen.findByRole('dialog', { name: /create git snapshot/i });
+    expect(within(dialog).getByText('2 affected files')).toBeVisible();
+    expect(within(dialog).queryByText('notes/ignored.md')).toBeNull();
+
+    fireEvent.change(within(dialog).getByLabelText(/snapshot message/i), {
+      target: { value: 'Save local changes' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: /confirm snapshot/i }));
+
+    await waitFor(() => expect(createGitSnapshot).toHaveBeenCalledWith('Save local changes'));
+    expect(await screen.findAllByText('Snapshot def456abc123 created')).toHaveLength(2);
+    expect(screen.getAllByText('Save local changes')).toHaveLength(2);
+  });
+
   it('loads file history and renders structured text, binary, and truncated diffs', async () => {
     const actions = workspaceActions({
       listGitHistory: vi.fn().mockResolvedValue(historyEntries()),
@@ -113,6 +183,36 @@ describe('GitWorkflowPanel history workflow', () => {
     expect(await screen.findByText('Resolve unsaved changes to continue restore.')).toBeVisible();
   });
 
+  it('renders restore stale-state failures returned by the lifecycle guard', async () => {
+    const restoreActiveFromGit = vi.fn().mockResolvedValue({
+      ok: false,
+      error: gitError(
+        'external_state_changed',
+        'The repository changed after the restore view was loaded.',
+        'restore',
+      ),
+    });
+    const actions = workspaceActions({
+      listGitHistory: vi.fn().mockResolvedValue(historyEntries()),
+      getGitDiff: vi.fn().mockResolvedValue(diffResult()),
+      restoreActiveFromGit,
+    });
+
+    render(<GitWorkflowPanel workspaceState={workspaceState()} workspaceActions={actions} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /view history/i }));
+    await screen.findByText('Save initial plan');
+    fireEvent.click(await screen.findByRole('button', { name: /restore/i }));
+    fireEvent.click(
+      within(await screen.findByRole('dialog', { name: /restore from git history/i }))
+        .getByRole('button', { name: /confirm restore/i }),
+    );
+
+    await waitFor(() => expect(restoreActiveFromGit).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('Git state changed')).toBeVisible();
+    expect(screen.getByText('The repository changed after the restore view was loaded.')).toBeVisible();
+  });
+
   it('renders typed diff errors from invalid refs', async () => {
     const actions = workspaceActions({
       listGitHistory: vi.fn().mockResolvedValue(historyEntries()),
@@ -156,9 +256,20 @@ function workspaceActions(
   };
 }
 
-function workspaceState(input: { dirty?: boolean } = {}): WorkspaceLifecycleState {
+function workspaceState(
+  input: {
+    dirty?: boolean;
+    repositoryState?: GitRepositoryState['state'];
+    statusToken?: string;
+    entries?: GitStatusSummary['entries'];
+  } = {},
+): WorkspaceLifecycleState {
   const active = activeDocumentState(input.dirty ?? false);
-  const status = gitStatusSummary();
+  const status = gitStatusSummary({
+    repositoryState: input.repositoryState,
+    token: input.statusToken,
+    entries: input.entries,
+  });
 
   return {
     startupStatus: 'ready',
@@ -317,11 +428,36 @@ function restoreResult(): GitRestoreResult {
   };
 }
 
+function snapshotResult(): GitSnapshotResult {
+  const status = gitStatusSummary({
+    entries: [],
+    token: 'post-snapshot-token',
+  });
+
+  return {
+    workspaceId: 'workspace-1',
+    commitOid: 'def456abc1237890def456abc1237890def456ab',
+    shortCommitOid: 'def456abc123',
+    parentOids: ['abc123def4567890abc123def4567890abc123de'],
+    message: 'Save local changes',
+    affectedPaths: ['notes/plan.md', 'notes/new.md'],
+    affectedFileCount: 2,
+    repositoryState: status.repositoryState,
+    status,
+    snapshotAt: '2026-05-10T00:03:00Z',
+  };
+}
+
 function gitStatusSummary(
-  input: { repositoryState?: GitRepositoryState['state']; entries?: GitStatusSummary['entries'] } = {},
+  input: {
+    repositoryState?: GitRepositoryState['state'];
+    entries?: GitStatusSummary['entries'];
+    token?: string;
+  } = {},
 ): GitStatusSummary {
-  const token = gitToken();
+  const token = gitToken(input.token);
   const entries = input.entries ?? [];
+  const isRepositoryEnabled = input.repositoryState !== 'not_repository';
 
   return {
     workspaceId: 'workspace-1',
@@ -333,14 +469,14 @@ function gitStatusSummary(
         version: 'git version 2.52.0',
       },
       selectedRootDisplayPath: 'C:\\Notes',
-      repositoryRootDisplayPath: 'C:\\Notes',
-      branchName: 'main',
-      headOid: token.headOid,
-      token,
+      repositoryRootDisplayPath: isRepositoryEnabled ? 'C:\\Notes' : null,
+      branchName: isRepositoryEnabled ? 'main' : null,
+      headOid: isRepositoryEnabled ? token.headOid : null,
+      token: isRepositoryEnabled ? token : null,
       warnings: [],
       checkedAt: '2026-05-10T00:00:00Z',
     },
-    token,
+    token: isRepositoryEnabled ? token : null,
     entries,
     counts: {
       added: 0,
@@ -358,9 +494,9 @@ function gitStatusSummary(
   };
 }
 
-function gitToken(): GitRepositoryStateToken {
+function gitToken(token = 'repo-token'): GitRepositoryStateToken {
   return {
-    token: 'repo-token',
+    token,
     headOid: 'abc123def4567890',
     indexVersion: 3,
     indexChecksum: 'index',
@@ -369,10 +505,14 @@ function gitToken(): GitRepositoryStateToken {
   };
 }
 
-function gitError(code: GitOperationError['code'], message: string): GitOperationError {
+function gitError(
+  code: GitOperationError['code'],
+  message: string,
+  operation: GitOperationError['operation'] = 'diff',
+): GitOperationError {
   return {
     code,
-    operation: 'diff',
+    operation,
     message,
     recoverable: true,
   };
