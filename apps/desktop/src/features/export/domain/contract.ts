@@ -36,7 +36,11 @@ export const EXPORT_WARNING_CODES: Readonly<Record<string, ExportWarningCode>> =
   LARGE_MAP_SCALED: 'large_map_scaled',
   PDF_FIT_TO_PAGE: 'pdf_fit_to_page',
   MARKDOWN_COMPATIBILITY_WARNING: 'markdown_compatibility_warning',
+  UNMAPPED_MARKDOWN_BLOCK: 'unmapped_markdown_block',
+  UNSUPPORTED_NODE_CONTENT: 'unsupported_node_content',
   UNRESOLVED_LINK: 'unresolved_link',
+  MARKDOWN_CANONICALIZATION: 'markdown_canonicalization',
+  MARKDOWN_SERIALIZATION_LOSSY: 'markdown_serialization_lossy',
   OUTPUT_OVERWRITE_REQUESTED: 'output_overwrite_requested',
 };
 

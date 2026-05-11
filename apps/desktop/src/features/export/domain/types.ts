@@ -202,7 +202,11 @@ export type ExportWarningCode =
   | 'large_map_scaled'
   | 'pdf_fit_to_page'
   | 'markdown_compatibility_warning'
+  | 'unmapped_markdown_block'
+  | 'unsupported_node_content'
   | 'unresolved_link'
+  | 'markdown_canonicalization'
+  | 'markdown_serialization_lossy'
   | 'output_overwrite_requested';
 
 export interface ExportWarning {
