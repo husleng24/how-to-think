@@ -381,6 +381,74 @@ describe('App workspace lifecycle', () => {
 
     expect(screen.getByRole('textbox', { name: /rename new thought/i })).toBeVisible();
   });
+
+  it('keeps AI chat and suggestion drafts review-only without saving Markdown', async () => {
+    Object.defineProperty(window, '__TAURI_INTERNALS__', {
+      configurable: true,
+      value: {},
+    });
+    const fixture = createWorkspaceLifecycleFixture({
+      markdownFiles: {
+        'notes/plan.md': '# Plan\n',
+      },
+    });
+
+    invokeMock.mockImplementation((command, args) => {
+      const payload = args as InvokePayload | undefined;
+
+      switch (command) {
+        case 'load_remembered_workspace':
+          return Promise.resolve(fixture.session({ lastOpenedFile: 'notes/plan.md' }));
+        case 'openMarkdownMindMap':
+          return Promise.resolve(fixture.openResult(payload?.request?.relativePath ?? 'notes/plan.md'));
+        case 'remember_last_opened_file':
+          return Promise.resolve();
+        case 'list_ai_providers':
+          return Promise.resolve(healthyAiProviderSettings());
+        case 'preview_ai_context_snapshot':
+          return Promise.resolve(aiContextSnapshot(payload?.request));
+        case 'send_ai_conversation_message':
+          return Promise.resolve(aiResponse(payload?.request));
+        default:
+          return Promise.reject(new Error(`Unexpected command: ${command}`));
+      }
+    });
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: 'Plan' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /open ai assistant/i }));
+
+    expect(await screen.findByText('Selected node: Plan')).toBeVisible();
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Summarize this map' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Assistant shell response')).toBeVisible();
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'saveMarkdownMindMap')).toHaveLength(0);
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Rewrite the selected branch with clearer steps.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    await waitFor(() =>
+      expect(
+        invokeMock.mock.calls.filter(([command]) => command === 'send_ai_conversation_message'),
+      ).toHaveLength(2),
+    );
+    expect(await screen.findByText('Suggestion available')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
+    expect(await screen.findByText('Suggestion draft')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /review suggestion/i }));
+
+    expect(await screen.findByText('Suggestion draft saved')).toBeVisible();
+    expect(screen.getByRole('button', { name: /accept whole proposal/i })).toBeDisabled();
+    expect(invokeMock.mock.calls.filter(([command]) => command === 'saveMarkdownMindMap')).toHaveLength(0);
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+  });
 });
 
 interface InvokePayload {

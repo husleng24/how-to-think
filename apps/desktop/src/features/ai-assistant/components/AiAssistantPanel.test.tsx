@@ -234,6 +234,30 @@ describe('AiAssistantPanel', () => {
     expect(screen.getByText(/Answered using Selected node: Plan from editor revision 1/i)).toBeVisible();
   });
 
+  it('keeps chat-only responses from mutating editor state or workspace save state', async () => {
+    const client = createMockClient();
+    const state = editorState();
+    const documentRef = state.document;
+    const historyRef = state.history;
+    const { workspaceState } = renderPanel({
+      client,
+      editor: state,
+    });
+
+    await screen.findByText('Selected node: Plan');
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Summarize this branch.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Assistant response')).toBeVisible();
+    expect(state.document).toBe(documentRef);
+    expect(state.history).toBe(historyRef);
+    expect(state.isDirty).toBe(false);
+    expect(workspaceState.saveStatus.kind).toBe('saved');
+    expect(screen.queryByRole('button', { name: /save as suggestion/i })).not.toBeInTheDocument();
+  });
+
   it('saves suggestion draft candidates without mutating editor state', async () => {
     const client = createMockClient();
     const onReviewSuggestionDraft = vi.fn();

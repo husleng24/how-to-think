@@ -69,4 +69,6 @@ For manual inspection, use the 500-node generated fixture in the editor checks a
 
 For local-first workspace lifecycle verification, follow `apps/desktop/docs/local-first-workspace-verification.md`. It covers first-run workspace selection, offline create/open/save, restart recovery, external editor conflicts, external delete or move, invalid filenames, and permission failures.
 
+For local AI assistant provider setup, context/privacy behavior, mock-provider validation, and manual Codex/Claude QA, follow `apps/desktop/docs/ai-assistant-operator-guide.md`.
+
 The scaffold is intentionally isolated under `apps/desktop/` so future `packages/*` and `crates/*` work can be added without coupling to the initial shell.
