@@ -200,6 +200,17 @@ pub struct GitStatusEntry {
     pub conflicted: bool,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStatusCounts {
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize,
+    pub renamed: usize,
+    pub untracked: usize,
+    pub ignored: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct GitStatusSummary {
@@ -207,6 +218,7 @@ pub struct GitStatusSummary {
     pub repository_state: GitRepositoryState,
     pub token: Option<GitRepositoryStateToken>,
     pub entries: Vec<GitStatusEntry>,
+    pub counts: GitStatusCounts,
     pub has_changes: bool,
     pub has_conflicts: bool,
     pub changed_file_count: usize,
@@ -245,8 +257,11 @@ pub struct GitSnapshotRequest {
 pub struct GitSnapshotResult {
     pub workspace_id: WorkspaceId,
     pub commit_oid: String,
+    pub short_commit_oid: String,
     pub parent_oids: Vec<String>,
     pub message: String,
+    pub affected_paths: Vec<WorkspaceRelativePath>,
+    pub affected_file_count: usize,
     pub repository_state: GitRepositoryState,
     pub status: GitStatusSummary,
     pub snapshot_at: IsoDateTime,

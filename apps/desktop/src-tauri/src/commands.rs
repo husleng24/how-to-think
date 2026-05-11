@@ -8,6 +8,7 @@ use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
 use crate::git_contracts::{
     GitOperationError, GitOperationErrorCode, GitRepositoryState, GitServiceOperation,
+    GitSnapshotRequest, GitSnapshotResult, GitStatusSummary,
 };
 use crate::git_service;
 use crate::links::index::WorkspaceLinkIndex;
@@ -366,6 +367,26 @@ pub fn git_init_repository(
     let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)
         .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Init, error))?;
     git_service::enable_git_for_workspace(&record)
+}
+
+#[tauri::command]
+pub fn git_status(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<GitStatusSummary, GitOperationError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Status, error))?;
+    git_service::get_git_status(&record)
+}
+
+#[tauri::command]
+pub fn git_create_snapshot(
+    app: AppHandle,
+    request: GitSnapshotRequest,
+) -> Result<GitSnapshotResult, GitOperationError> {
+    let record = workspace_record_for_id(&app, &request.workspace_id, WorkspaceOperation::SaveFile)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Snapshot, error))?;
+    git_service::create_snapshot(&record, request)
 }
 
 fn settings_store(

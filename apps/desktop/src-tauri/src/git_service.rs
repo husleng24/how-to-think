@@ -1,11 +1,16 @@
 use crate::git_contracts::{
+    is_repository_token_stale, validate_git_workspace_relative_path, GitAuthorIdentity,
     GitBackendInfo, GitBackendKind, GitOperationError, GitOperationErrorCode, GitRepositoryState,
     GitRepositoryStateKind, GitRepositoryStateToken, GitRepositoryWarning, GitServiceOperation,
+    GitSnapshotRequest, GitSnapshotResult, GitStatusChangeKind, GitStatusCounts, GitStatusEntry,
+    GitStatusSummary,
 };
 use crate::models::{IsoDateTime, WorkspaceRecord, WorkspaceRelativePath};
+use crate::path_guard::supported_markdown_extension;
 use crate::time_utils::now_iso;
 use sha2::{Digest, Sha256};
-use std::ffi::OsStr;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -25,6 +30,17 @@ pub fn enable_git_for_workspace(
     GitRepositoryService::default().enable(record)
 }
 
+pub fn get_git_status(record: &WorkspaceRecord) -> Result<GitStatusSummary, GitOperationError> {
+    GitRepositoryService::default().status(record)
+}
+
+pub fn create_snapshot(
+    record: &WorkspaceRecord,
+    request: GitSnapshotRequest,
+) -> Result<GitSnapshotResult, GitOperationError> {
+    GitRepositoryService::default().create_snapshot(record, request)
+}
+
 #[derive(Debug, Clone)]
 struct GitRepositoryService {
     git_executable: String,
@@ -39,6 +55,20 @@ struct GitCommandOutput {
 enum WorktreeState {
     Clean,
     MergeOrSequencer,
+}
+
+#[derive(Debug, Clone)]
+struct RepositoryContext {
+    repository_root: PathBuf,
+    workspace_prefix_in_repo: Option<WorkspaceRelativePath>,
+    repository_prefix_in_workspace: Option<WorkspaceRelativePath>,
+}
+
+#[derive(Debug, Clone)]
+struct SnapshotEntry {
+    workspace_path: WorkspaceRelativePath,
+    repo_path: WorkspaceRelativePath,
+    previous_repo_path: Option<WorkspaceRelativePath>,
 }
 
 impl Default for GitRepositoryService {
@@ -83,6 +113,351 @@ impl GitRepositoryService {
             GitServiceOperation::Init,
         )?;
         self.detect_with_operation(record, GitServiceOperation::Init)
+    }
+
+    fn status(&self, record: &WorkspaceRecord) -> Result<GitStatusSummary, GitOperationError> {
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::Status)?;
+        self.status_for_state(record, repository_state)
+    }
+
+    fn create_snapshot(
+        &self,
+        record: &WorkspaceRecord,
+        request: GitSnapshotRequest,
+    ) -> Result<GitSnapshotResult, GitOperationError> {
+        if request.workspace_id != record.info.id {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NotRepository,
+                GitServiceOperation::Snapshot,
+                "The snapshot request workspace id does not match the selected workspace.",
+                true,
+            ));
+        }
+
+        let message = validate_snapshot_message(&request.message)?;
+        validate_snapshot_request_paths(&request)?;
+
+        let repository_state = self.detect_with_operation(record, GitServiceOperation::Snapshot)?;
+        self.ensure_snapshot_state(&repository_state)?;
+
+        if is_repository_token_stale(
+            Some(&request.expected_repo_token),
+            repository_state.token.as_ref(),
+        ) {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::ExternalStateChanged,
+                GitServiceOperation::Snapshot,
+                "The repository changed after the UI last refreshed Git status.",
+                true,
+            ));
+        }
+
+        let context = repository_context(record, &repository_state, GitServiceOperation::Snapshot)?;
+        let status = self.status_for_state(record, repository_state.clone())?;
+        let snapshot_entries = select_snapshot_entries(&context, &status.entries, &request)?;
+
+        if snapshot_entries.is_empty() {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NoChanges,
+                GitServiceOperation::Snapshot,
+                "There are no eligible workspace changes to snapshot.",
+                true,
+            ));
+        }
+
+        let identity = self.resolve_author_identity(&context.repository_root, request.author)?;
+        self.stage_snapshot_entries(&context, &snapshot_entries)?;
+
+        if !self.has_staged_changes(&context.repository_root)? {
+            return Err(GitOperationError::new(
+                GitOperationErrorCode::NoChanges,
+                GitServiceOperation::Snapshot,
+                "There are no staged workspace changes to commit.",
+                true,
+            ));
+        }
+
+        self.commit_snapshot(&context.repository_root, &message, &identity)?;
+
+        let commit_oid = self
+            .run_git_result(
+                &context.repository_root,
+                ["rev-parse", "--verify", "HEAD"],
+                GitServiceOperation::Snapshot,
+            )?
+            .stdout
+            .trim()
+            .to_owned();
+        let parent_oids = self.parent_oids(&context.repository_root)?;
+        let short_commit_oid = short_commit_oid(&commit_oid);
+        let affected_paths = snapshot_entries
+            .iter()
+            .map(|entry| entry.workspace_path.clone())
+            .collect::<Vec<_>>();
+        let affected_file_count = affected_paths.len();
+        let refreshed_status = self.status(record)?;
+        let repository_state = refreshed_status.repository_state.clone();
+
+        Ok(GitSnapshotResult {
+            workspace_id: record.info.id.clone(),
+            commit_oid,
+            short_commit_oid,
+            parent_oids,
+            message,
+            affected_paths,
+            affected_file_count,
+            repository_state,
+            status: refreshed_status,
+            snapshot_at: now_iso(),
+        })
+    }
+
+    fn status_for_state(
+        &self,
+        record: &WorkspaceRecord,
+        repository_state: GitRepositoryState,
+    ) -> Result<GitStatusSummary, GitOperationError> {
+        if repository_state.state == GitRepositoryStateKind::NotRepository {
+            return Ok(empty_status_summary(record, repository_state));
+        }
+
+        if !matches!(
+            repository_state.state,
+            GitRepositoryStateKind::ValidRepository
+                | GitRepositoryStateKind::NestedRepository
+                | GitRepositoryStateKind::ParentRepository
+                | GitRepositoryStateKind::DetachedHead
+                | GitRepositoryStateKind::MergeConflict
+        ) {
+            return Err(GitOperationError::new(
+                blocked_by_state(repository_state.state),
+                GitServiceOperation::Status,
+                "Git status is unavailable for the selected workspace in its current repository state.",
+                true,
+            ));
+        }
+
+        let context = repository_context(record, &repository_state, GitServiceOperation::Status)?;
+        let mut entries = self.status_entries(record, &context)?;
+        entries.extend(self.ignored_status_entries(record, &context, &entries)?);
+        entries.sort_by(|left, right| left.relative_path.cmp(&right.relative_path));
+
+        Ok(status_summary(record, repository_state, entries))
+    }
+
+    fn status_entries(
+        &self,
+        record: &WorkspaceRecord,
+        context: &RepositoryContext,
+    ) -> Result<Vec<GitStatusEntry>, GitOperationError> {
+        let output = self.run_git_result(
+            &context.repository_root,
+            [
+                "status",
+                "--porcelain=v1",
+                "-z",
+                "--untracked-files=all",
+                "--find-renames",
+            ],
+            GitServiceOperation::Status,
+        )?;
+
+        Ok(parse_status_entries(
+            record,
+            context,
+            &output.stdout,
+            GitServiceOperation::Status,
+        ))
+    }
+
+    fn ignored_status_entries(
+        &self,
+        record: &WorkspaceRecord,
+        context: &RepositoryContext,
+        existing_entries: &[GitStatusEntry],
+    ) -> Result<Vec<GitStatusEntry>, GitOperationError> {
+        let output = self.run_git_result(
+            &context.repository_root,
+            [
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-standard",
+                "-z",
+            ],
+            GitServiceOperation::Status,
+        )?;
+        let existing = existing_entries
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect::<BTreeSet<_>>();
+
+        Ok(output
+            .stdout
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .filter_map(|repo_path| {
+                let relative_path = repo_path_to_workspace_relative(context, repo_path)?;
+                if existing.contains(relative_path.as_str())
+                    || !is_workspace_visible_markdown(&relative_path, record.info.case_sensitive)
+                    || validate_git_workspace_relative_path(
+                        &relative_path,
+                        GitServiceOperation::Status,
+                    )
+                    .is_err()
+                {
+                    return None;
+                }
+
+                Some(GitStatusEntry {
+                    relative_path,
+                    previous_relative_path: None,
+                    staged: GitStatusChangeKind::Unmodified,
+                    unstaged: GitStatusChangeKind::Ignored,
+                    conflicted: false,
+                })
+            })
+            .collect())
+    }
+
+    fn ensure_snapshot_state(
+        &self,
+        repository_state: &GitRepositoryState,
+    ) -> Result<(), GitOperationError> {
+        if matches!(
+            repository_state.state,
+            GitRepositoryStateKind::ValidRepository | GitRepositoryStateKind::NestedRepository
+        ) && repository_state.token.is_some()
+        {
+            return Ok(());
+        }
+
+        let code = if matches!(
+            repository_state.state,
+            GitRepositoryStateKind::ValidRepository | GitRepositoryStateKind::NestedRepository
+        ) {
+            GitOperationErrorCode::ExternalStateChanged
+        } else {
+            blocked_by_state(repository_state.state)
+        };
+
+        Err(GitOperationError::new(
+            code,
+            GitServiceOperation::Snapshot,
+            "Git snapshot creation is blocked for the selected workspace in its current repository state.",
+            true,
+        ))
+    }
+
+    fn resolve_author_identity(
+        &self,
+        cwd: &Path,
+        author: Option<GitAuthorIdentity>,
+    ) -> Result<GitAuthorIdentity, GitOperationError> {
+        if let Some(author) = author {
+            return validate_author_identity(author);
+        }
+
+        let name = self
+            .run_git_result(
+                cwd,
+                ["config", "--get", "user.name"],
+                GitServiceOperation::Snapshot,
+            )
+            .ok()
+            .and_then(|output| non_empty_trimmed(output.stdout));
+        let email = self
+            .run_git_result(
+                cwd,
+                ["config", "--get", "user.email"],
+                GitServiceOperation::Snapshot,
+            )
+            .ok()
+            .and_then(|output| non_empty_trimmed(output.stdout));
+
+        match (name, email) {
+            (Some(name), Some(email)) => validate_author_identity(GitAuthorIdentity { name, email }),
+            _ => Err(GitOperationError::new(
+                GitOperationErrorCode::IdentityMissing,
+                GitServiceOperation::Snapshot,
+                "Git author identity is missing. Configure user.name and user.email or provide an explicit snapshot author.",
+                true,
+            )),
+        }
+    }
+
+    fn stage_snapshot_entries(
+        &self,
+        context: &RepositoryContext,
+        entries: &[SnapshotEntry],
+    ) -> Result<(), GitOperationError> {
+        let mut repo_paths = BTreeSet::new();
+        for entry in entries {
+            repo_paths.insert(entry.repo_path.clone());
+            if let Some(previous_path) = &entry.previous_repo_path {
+                repo_paths.insert(previous_path.clone());
+            }
+        }
+
+        let mut args = vec![
+            OsString::from("add"),
+            OsString::from("--all"),
+            OsString::from("--"),
+        ];
+        args.extend(repo_paths.into_iter().map(OsString::from));
+
+        self.run_git_result(
+            &context.repository_root,
+            args,
+            GitServiceOperation::Snapshot,
+        )
+        .map(|_| ())
+    }
+
+    fn has_staged_changes(&self, cwd: &Path) -> Result<bool, GitOperationError> {
+        match self.raw_git_output(Some(cwd), ["diff", "--cached", "--quiet", "--"]) {
+            Ok(output) if output.status.success() => Ok(false),
+            Ok(output) if output.status.code() == Some(1) => Ok(true),
+            Ok(output) => Err(git_error_from_output(
+                GitServiceOperation::Snapshot,
+                &output,
+            )),
+            Err(error) => Err(git_error_from_io(GitServiceOperation::Snapshot, &error)),
+        }
+    }
+
+    fn commit_snapshot(
+        &self,
+        cwd: &Path,
+        message: &str,
+        identity: &GitAuthorIdentity,
+    ) -> Result<(), GitOperationError> {
+        let args = vec![
+            OsString::from("commit"),
+            OsString::from("--quiet"),
+            OsString::from("--message"),
+            OsString::from(message),
+        ];
+        let env = [
+            ("GIT_AUTHOR_NAME", identity.name.as_str()),
+            ("GIT_AUTHOR_EMAIL", identity.email.as_str()),
+            ("GIT_COMMITTER_NAME", identity.name.as_str()),
+            ("GIT_COMMITTER_EMAIL", identity.email.as_str()),
+        ];
+
+        self.run_git_result_with_env(cwd, args, GitServiceOperation::Snapshot, &env)
+            .map(|_| ())
+    }
+
+    fn parent_oids(&self, cwd: &Path) -> Result<Vec<String>, GitOperationError> {
+        let output = self.run_git_result(
+            cwd,
+            ["rev-list", "--parents", "-n", "1", "HEAD"],
+            GitServiceOperation::Snapshot,
+        )?;
+        let mut parts = output.stdout.split_whitespace();
+        let _commit = parts.next();
+        Ok(parts.map(str::to_owned).collect())
     }
 
     fn detect_with_operation(
@@ -318,6 +693,12 @@ impl GitRepositoryService {
         let (branch_name, head_oid, detached) =
             self.head_state(&nested_root).unwrap_or((None, None, false));
         let checked_at = now_iso();
+        let token = self
+            .git_dir(&nested_root)
+            .and_then(|git_dir| {
+                self.repository_token(&nested_root, &git_dir, head_oid.clone(), &checked_at)
+            })
+            .ok();
 
         Ok(GitRepositoryState {
             workspace_id: record.info.id.clone(),
@@ -332,7 +713,7 @@ impl GitRepositoryService {
             relative_prefix: relative_path_between(&record.canonical_root, &nested_root),
             branch_name,
             head_oid,
-            token: None,
+            token,
             blocked_reason: Some(if detached {
                 GitOperationErrorCode::DetachedHead
             } else {
@@ -457,7 +838,7 @@ impl GitRepositoryService {
         let (index_version, index_checksum) = index_token_parts(&git_dir.join("index"))?;
         let status_output = self.run_git_result(
             cwd,
-            ["status", "--porcelain=v1", "-z"],
+            ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
             GitServiceOperation::Detect,
         )?;
         let worktree_status_generation = sha256_hex(status_output.stdout.as_bytes());
@@ -506,7 +887,40 @@ impl GitRepositoryService {
         }
     }
 
+    fn run_git_result_with_env<I, S>(
+        &self,
+        cwd: &Path,
+        args: I,
+        operation: GitServiceOperation,
+        env: &[(&str, &str)],
+    ) -> Result<GitCommandOutput, GitOperationError>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        match self.raw_git_output_with_env(Some(cwd), args, env) {
+            Ok(output) if output.status.success() => Ok(GitCommandOutput {
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            }),
+            Ok(output) => Err(git_error_from_output(operation, &output)),
+            Err(error) => Err(git_error_from_io(operation, &error)),
+        }
+    }
+
     fn raw_git_output<I, S>(&self, cwd: Option<&Path>, args: I) -> io::Result<Output>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.raw_git_output_with_env(cwd, args, &[])
+    }
+
+    fn raw_git_output_with_env<I, S>(
+        &self,
+        cwd: Option<&Path>,
+        args: I,
+        env: &[(&str, &str)],
+    ) -> io::Result<Output>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
@@ -520,8 +934,441 @@ impl GitRepositoryService {
             .env_remove("GIT_DIR")
             .env_remove("GIT_WORK_TREE")
             .env_remove("GIT_INDEX_FILE")
+            .env("GIT_TERMINAL_PROMPT", "0")
+            .env("GIT_EDITOR", ":")
+            .env("GIT_PAGER", "cat")
+            .envs(env.iter().copied())
             .output()
     }
+}
+
+fn empty_status_summary(
+    record: &WorkspaceRecord,
+    repository_state: GitRepositoryState,
+) -> GitStatusSummary {
+    status_summary(record, repository_state, Vec::new())
+}
+
+fn status_summary(
+    record: &WorkspaceRecord,
+    repository_state: GitRepositoryState,
+    entries: Vec<GitStatusEntry>,
+) -> GitStatusSummary {
+    let counts = status_counts(&entries);
+    let has_conflicts = entries.iter().any(|entry| entry.conflicted);
+    let changed_file_count = entries
+        .iter()
+        .filter(|entry| primary_change_kind(entry) != GitStatusChangeKind::Ignored)
+        .count();
+    let untracked_file_count = counts.untracked;
+
+    GitStatusSummary {
+        workspace_id: record.info.id.clone(),
+        token: repository_state.token.clone(),
+        repository_state,
+        entries,
+        counts,
+        has_changes: changed_file_count > 0,
+        has_conflicts,
+        changed_file_count,
+        untracked_file_count,
+        refreshed_at: now_iso(),
+    }
+}
+
+fn parse_status_entries(
+    record: &WorkspaceRecord,
+    context: &RepositoryContext,
+    output: &str,
+    operation: GitServiceOperation,
+) -> Vec<GitStatusEntry> {
+    let fields = output
+        .split('\0')
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>();
+    let mut entries = Vec::new();
+    let mut index = 0;
+
+    while index < fields.len() {
+        let field = fields[index];
+        let bytes = field.as_bytes();
+        if bytes.len() < 4 {
+            index += 1;
+            continue;
+        }
+
+        let staged = status_change_kind(bytes[0]);
+        let unstaged = status_change_kind(bytes[1]);
+        let repo_path = &field[3..];
+        let previous_repo_path = if matches!(
+            staged,
+            GitStatusChangeKind::Renamed | GitStatusChangeKind::Copied
+        ) {
+            index += 1;
+            fields.get(index).copied()
+        } else {
+            None
+        };
+
+        index += 1;
+
+        let Some(relative_path) = repo_path_to_workspace_relative(context, repo_path) else {
+            continue;
+        };
+        let previous_relative_path =
+            previous_repo_path.and_then(|path| repo_path_to_workspace_relative(context, path));
+
+        if !is_workspace_visible_status_path(
+            &relative_path,
+            previous_relative_path.as_deref(),
+            record.info.case_sensitive,
+        ) || validate_git_workspace_relative_path(&relative_path, operation).is_err()
+            || previous_relative_path
+                .as_deref()
+                .is_some_and(|path| validate_git_workspace_relative_path(path, operation).is_err())
+        {
+            continue;
+        }
+
+        entries.push(GitStatusEntry {
+            relative_path,
+            previous_relative_path,
+            staged,
+            unstaged,
+            conflicted: is_conflicted_status(staged, unstaged),
+        });
+    }
+
+    entries
+}
+
+fn status_counts(entries: &[GitStatusEntry]) -> GitStatusCounts {
+    let mut counts = GitStatusCounts::default();
+
+    for entry in entries {
+        match primary_change_kind(entry) {
+            GitStatusChangeKind::Added => counts.added += 1,
+            GitStatusChangeKind::Modified => counts.modified += 1,
+            GitStatusChangeKind::Deleted => counts.deleted += 1,
+            GitStatusChangeKind::Renamed | GitStatusChangeKind::Copied => counts.renamed += 1,
+            GitStatusChangeKind::Untracked => counts.untracked += 1,
+            GitStatusChangeKind::Ignored => counts.ignored += 1,
+            GitStatusChangeKind::Unmerged => counts.modified += 1,
+            GitStatusChangeKind::Unknown => counts.modified += 1,
+            GitStatusChangeKind::Unmodified => {}
+        }
+    }
+
+    counts
+}
+
+fn primary_change_kind(entry: &GitStatusEntry) -> GitStatusChangeKind {
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Ignored) {
+            return GitStatusChangeKind::Ignored;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Untracked) {
+            return GitStatusChangeKind::Untracked;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(
+            kind,
+            GitStatusChangeKind::Renamed | GitStatusChangeKind::Copied
+        ) {
+            return kind;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Added) {
+            return GitStatusChangeKind::Added;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Deleted) {
+            return GitStatusChangeKind::Deleted;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Unmerged) {
+            return GitStatusChangeKind::Unmerged;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Modified) {
+            return GitStatusChangeKind::Modified;
+        }
+    }
+    for kind in [entry.staged, entry.unstaged] {
+        if matches!(kind, GitStatusChangeKind::Unknown) {
+            return GitStatusChangeKind::Unknown;
+        }
+    }
+
+    GitStatusChangeKind::Unmodified
+}
+
+fn status_change_kind(value: u8) -> GitStatusChangeKind {
+    match value {
+        b' ' => GitStatusChangeKind::Unmodified,
+        b'M' => GitStatusChangeKind::Modified,
+        b'A' => GitStatusChangeKind::Added,
+        b'D' => GitStatusChangeKind::Deleted,
+        b'R' => GitStatusChangeKind::Renamed,
+        b'C' => GitStatusChangeKind::Copied,
+        b'?' => GitStatusChangeKind::Untracked,
+        b'!' => GitStatusChangeKind::Ignored,
+        b'U' => GitStatusChangeKind::Unmerged,
+        _ => GitStatusChangeKind::Unknown,
+    }
+}
+
+fn is_conflicted_status(staged: GitStatusChangeKind, unstaged: GitStatusChangeKind) -> bool {
+    matches!(
+        (staged, unstaged),
+        (GitStatusChangeKind::Unmerged, _)
+            | (_, GitStatusChangeKind::Unmerged)
+            | (GitStatusChangeKind::Added, GitStatusChangeKind::Added)
+            | (GitStatusChangeKind::Deleted, GitStatusChangeKind::Deleted)
+            | (GitStatusChangeKind::Added, GitStatusChangeKind::Deleted)
+            | (GitStatusChangeKind::Deleted, GitStatusChangeKind::Added)
+    )
+}
+
+fn repository_context(
+    record: &WorkspaceRecord,
+    repository_state: &GitRepositoryState,
+    operation: GitServiceOperation,
+) -> Result<RepositoryContext, GitOperationError> {
+    let repository_root = repository_state
+        .repository_root_display_path
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| record.canonical_root.clone());
+    let repository_root = canonicalize_lossy(&repository_root);
+
+    if paths_equal(&repository_root, &record.canonical_root) {
+        return Ok(RepositoryContext {
+            repository_root,
+            workspace_prefix_in_repo: None,
+            repository_prefix_in_workspace: None,
+        });
+    }
+
+    if record.canonical_root.starts_with(&repository_root) {
+        let Some(prefix) = relative_path_between(&repository_root, &record.canonical_root) else {
+            return Err(repository_scope_error(operation));
+        };
+        return Ok(RepositoryContext {
+            repository_root,
+            workspace_prefix_in_repo: Some(prefix),
+            repository_prefix_in_workspace: None,
+        });
+    }
+
+    if repository_root.starts_with(&record.canonical_root) {
+        let Some(prefix) = relative_path_between(&record.canonical_root, &repository_root) else {
+            return Err(repository_scope_error(operation));
+        };
+        return Ok(RepositoryContext {
+            repository_root,
+            workspace_prefix_in_repo: None,
+            repository_prefix_in_workspace: Some(prefix),
+        });
+    }
+
+    Err(repository_scope_error(operation))
+}
+
+fn repo_path_to_workspace_relative(
+    context: &RepositoryContext,
+    repo_path: &str,
+) -> Option<WorkspaceRelativePath> {
+    let repo_path = normalize_git_relative_path(repo_path)?;
+
+    if let Some(prefix) = &context.workspace_prefix_in_repo {
+        if repo_path == *prefix {
+            return None;
+        }
+
+        return repo_path
+            .strip_prefix(&format!("{prefix}/"))
+            .map(str::to_owned);
+    }
+
+    if let Some(prefix) = &context.repository_prefix_in_workspace {
+        return Some(format!("{prefix}/{repo_path}"));
+    }
+
+    Some(repo_path)
+}
+
+fn workspace_path_to_repo_relative(
+    context: &RepositoryContext,
+    workspace_path: &str,
+) -> Option<WorkspaceRelativePath> {
+    let workspace_path = normalize_git_relative_path(workspace_path)?;
+
+    if let Some(prefix) = &context.workspace_prefix_in_repo {
+        return Some(format!("{prefix}/{workspace_path}"));
+    }
+
+    if let Some(prefix) = &context.repository_prefix_in_workspace {
+        if workspace_path == *prefix {
+            return None;
+        }
+
+        return workspace_path
+            .strip_prefix(&format!("{prefix}/"))
+            .map(str::to_owned);
+    }
+
+    Some(workspace_path)
+}
+
+fn normalize_git_relative_path(path: &str) -> Option<WorkspaceRelativePath> {
+    if path.is_empty() || path.ends_with('/') {
+        return None;
+    }
+
+    validate_git_workspace_relative_path(path, GitServiceOperation::Status).ok()
+}
+
+fn repository_scope_error(operation: GitServiceOperation) -> GitOperationError {
+    GitOperationError::new(
+        GitOperationErrorCode::RepositoryCorrupt,
+        operation,
+        "The Git repository root cannot be safely mapped to the selected workspace.",
+        true,
+    )
+}
+
+fn is_workspace_visible_status_path(
+    relative_path: &str,
+    previous_relative_path: Option<&str>,
+    case_sensitive: bool,
+) -> bool {
+    is_workspace_visible_markdown(relative_path, case_sensitive)
+        || previous_relative_path
+            .map(|path| is_workspace_visible_markdown(path, case_sensitive))
+            .unwrap_or(false)
+}
+
+fn is_workspace_visible_markdown(relative_path: &str, case_sensitive: bool) -> bool {
+    Path::new(relative_path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| supported_markdown_extension(name, case_sensitive))
+        .is_some()
+}
+
+fn validate_snapshot_message(message: &str) -> Result<String, GitOperationError> {
+    let message = message.trim();
+    if message.is_empty() {
+        return Err(GitOperationError::new(
+            GitOperationErrorCode::NoChanges,
+            GitServiceOperation::Snapshot,
+            "Snapshot messages must be non-empty.",
+            true,
+        ));
+    }
+
+    Ok(message.to_owned())
+}
+
+fn validate_snapshot_request_paths(request: &GitSnapshotRequest) -> Result<(), GitOperationError> {
+    for path in request.scope_paths.iter().chain(
+        request
+            .expected_file_states
+            .iter()
+            .map(|state| &state.relative_path),
+    ) {
+        validate_git_workspace_relative_path(path, GitServiceOperation::Snapshot)?;
+    }
+
+    Ok(())
+}
+
+fn select_snapshot_entries(
+    context: &RepositoryContext,
+    status_entries: &[GitStatusEntry],
+    request: &GitSnapshotRequest,
+) -> Result<Vec<SnapshotEntry>, GitOperationError> {
+    let requested_paths = request.scope_paths.iter().cloned().collect::<BTreeSet<_>>();
+    let explicit_scope = !requested_paths.is_empty();
+    let mut selected = BTreeMap::new();
+
+    for entry in status_entries {
+        if !is_snapshot_eligible(entry) {
+            continue;
+        }
+
+        if explicit_scope && !requested_paths.contains(&entry.relative_path) {
+            continue;
+        }
+
+        let Some(repo_path) = workspace_path_to_repo_relative(context, &entry.relative_path) else {
+            continue;
+        };
+        let previous_repo_path = entry
+            .previous_relative_path
+            .as_deref()
+            .and_then(|path| workspace_path_to_repo_relative(context, path));
+
+        selected.insert(
+            entry.relative_path.clone(),
+            SnapshotEntry {
+                workspace_path: entry.relative_path.clone(),
+                repo_path,
+                previous_repo_path,
+            },
+        );
+    }
+
+    Ok(selected.into_values().collect())
+}
+
+fn is_snapshot_eligible(entry: &GitStatusEntry) -> bool {
+    if entry.conflicted {
+        return false;
+    }
+
+    !matches!(
+        primary_change_kind(entry),
+        GitStatusChangeKind::Unmodified | GitStatusChangeKind::Ignored
+    )
+}
+
+fn validate_author_identity(
+    author: GitAuthorIdentity,
+) -> Result<GitAuthorIdentity, GitOperationError> {
+    let name = author.name.trim();
+    let email = author.email.trim();
+
+    if name.is_empty()
+        || email.is_empty()
+        || !email.contains('@')
+        || name.chars().any(char::is_control)
+        || email.chars().any(char::is_control)
+    {
+        return Err(GitOperationError::new(
+            GitOperationErrorCode::IdentityMissing,
+            GitServiceOperation::Snapshot,
+            "Git author identity must include a non-empty name and email address.",
+            true,
+        ));
+    }
+
+    Ok(GitAuthorIdentity {
+        name: name.to_owned(),
+        email: email.to_owned(),
+    })
+}
+
+fn short_commit_oid(commit_oid: &str) -> String {
+    commit_oid.chars().take(12).collect()
 }
 
 fn base_state(
@@ -578,6 +1425,13 @@ fn git_error_from_output(operation: GitServiceOperation, output: &Output) -> Git
     let lower = message.to_ascii_lowercase();
     let code = if lower.contains("permission denied") || lower.contains("access is denied") {
         GitOperationErrorCode::PermissionDenied
+    } else if lower.contains("author identity unknown")
+        || lower.contains("unable to auto-detect email address")
+        || lower.contains("empty ident name")
+    {
+        GitOperationErrorCode::IdentityMissing
+    } else if lower.contains("nothing to commit") {
+        GitOperationErrorCode::NoChanges
     } else if lower.contains("not a git repository") {
         GitOperationErrorCode::NotRepository
     } else if lower.contains("not a gitdir")
@@ -800,6 +1654,113 @@ mod tests {
         );
     }
 
+    fn git_stdout(cwd: &Path, args: &[&str]) -> String {
+        let output = Command::new(DEFAULT_GIT_EXECUTABLE)
+            .current_dir(cwd)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn configure_identity(cwd: &Path) {
+        git(cwd, &["config", "user.email", "test@example.invalid"]);
+        git(cwd, &["config", "user.name", "Test User"]);
+    }
+
+    fn commit_all(cwd: &Path, message: &str) {
+        git(cwd, &["add", "--all"]);
+        git(cwd, &["commit", "--quiet", "-m", message]);
+    }
+
+    fn snapshot_request(
+        record: &WorkspaceRecord,
+        status: &GitStatusSummary,
+        message: &str,
+    ) -> GitSnapshotRequest {
+        GitSnapshotRequest {
+            workspace_id: record.info.id.clone(),
+            message: message.to_owned(),
+            scope_paths: Vec::new(),
+            expected_repo_token: status.token.clone().unwrap(),
+            expected_file_states: Vec::new(),
+            author: Some(GitAuthorIdentity {
+                name: "Snapshot Bot".to_owned(),
+                email: "snapshot@example.invalid".to_owned(),
+            }),
+        }
+    }
+
+    #[test]
+    fn normalizes_porcelain_status_to_workspace_entries_and_counts() {
+        let temp = tempfile::tempdir().unwrap();
+        let record = record_for(temp.path());
+        let context = RepositoryContext {
+            repository_root: temp.path().to_path_buf(),
+            workspace_prefix_in_repo: None,
+            repository_prefix_in_workspace: None,
+        };
+        let entries = parse_status_entries(
+            &record,
+            &context,
+            " M notes/idea.md\0?? notes/new.md\0R  notes/new-name.md\0notes/old-name.md\0",
+            GitServiceOperation::Status,
+        );
+
+        let counts = status_counts(&entries);
+
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].relative_path, "notes/idea.md");
+        assert_eq!(entries[0].unstaged, GitStatusChangeKind::Modified);
+        assert_eq!(entries[1].unstaged, GitStatusChangeKind::Untracked);
+        assert_eq!(entries[2].relative_path, "notes/new-name.md");
+        assert_eq!(
+            entries[2].previous_relative_path.as_deref(),
+            Some("notes/old-name.md")
+        );
+        assert_eq!(counts.modified, 1);
+        assert_eq!(counts.untracked, 1);
+        assert_eq!(counts.renamed, 1);
+    }
+
+    #[test]
+    fn validates_snapshot_messages_and_author_identities() {
+        assert_eq!(
+            validate_snapshot_message("  Save useful checkpoint  ").unwrap(),
+            "Save useful checkpoint"
+        );
+        assert_eq!(
+            validate_snapshot_message(" \t ").unwrap_err().code,
+            GitOperationErrorCode::NoChanges
+        );
+        assert_eq!(
+            validate_author_identity(GitAuthorIdentity {
+                name: "  Test User ".to_owned(),
+                email: " test@example.invalid ".to_owned(),
+            })
+            .unwrap(),
+            GitAuthorIdentity {
+                name: "Test User".to_owned(),
+                email: "test@example.invalid".to_owned(),
+            }
+        );
+        assert_eq!(
+            validate_author_identity(GitAuthorIdentity {
+                name: "Test User".to_owned(),
+                email: "not-an-email".to_owned(),
+            })
+            .unwrap_err()
+            .code,
+            GitOperationErrorCode::IdentityMissing
+        );
+    }
+
     #[test]
     fn reports_non_git_workspace_and_initializes_without_touching_file_bytes() {
         let temp = tempfile::tempdir().unwrap();
@@ -829,11 +1790,7 @@ mod tests {
     fn detects_existing_root_repository_branch_and_head() {
         let temp = tempfile::tempdir().unwrap();
         git(temp.path(), &["init", "--quiet"]);
-        git(
-            temp.path(),
-            &["config", "user.email", "test@example.invalid"],
-        );
-        git(temp.path(), &["config", "user.name", "Test User"]);
+        configure_identity(temp.path());
         fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
         git(temp.path(), &["add", "idea.md"]);
         git(temp.path(), &["commit", "--quiet", "-m", "Initial"]);
@@ -845,6 +1802,248 @@ mod tests {
         assert!(state.branch_name.is_some());
         assert_eq!(state.head_oid.as_deref().map(str::len), Some(40));
         assert!(state.token.is_some());
+    }
+
+    #[test]
+    fn reports_status_counts_for_workspace_markdown_changes() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("modified.md"), "# Original").unwrap();
+        fs::write(temp.path().join("deleted.md"), "# Delete").unwrap();
+        fs::write(temp.path().join("old.md"), "# Rename").unwrap();
+        commit_all(temp.path(), "Initial");
+        git(temp.path(), &["mv", "old.md", "renamed.md"]);
+        fs::write(temp.path().join("modified.md"), "# Changed").unwrap();
+        fs::remove_file(temp.path().join("deleted.md")).unwrap();
+        fs::write(temp.path().join("untracked.md"), "# New").unwrap();
+        fs::write(temp.path().join(".gitignore"), "ignored.md\n").unwrap();
+        fs::write(temp.path().join("ignored.md"), "# Ignored").unwrap();
+        fs::write(temp.path().join("untracked.txt"), "not visible").unwrap();
+        let record = record_for(temp.path());
+
+        let status = service().status(&record).unwrap();
+        let paths = status
+            .entries
+            .iter()
+            .map(|entry| entry.relative_path.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(status.counts.modified, 1);
+        assert_eq!(status.counts.deleted, 1);
+        assert_eq!(status.counts.renamed, 1);
+        assert_eq!(status.counts.untracked, 1);
+        assert_eq!(status.counts.ignored, 1);
+        assert_eq!(status.changed_file_count, 4);
+        assert!(status.has_changes);
+        assert_eq!(
+            paths,
+            vec![
+                "deleted.md",
+                "ignored.md",
+                "modified.md",
+                "renamed.md",
+                "untracked.md"
+            ]
+        );
+        assert!(status
+            .entries
+            .iter()
+            .any(|entry| entry.previous_relative_path.as_deref() == Some("old.md")));
+    }
+
+    #[test]
+    fn creates_initial_snapshot_commit_and_returns_refreshed_status() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        let request = snapshot_request(&record, &status, "Save local snapshot");
+
+        let result = service().create_snapshot(&record, request).unwrap();
+
+        assert_eq!(result.workspace_id, record.info.id);
+        assert_eq!(result.commit_oid.len(), 40);
+        assert_eq!(result.short_commit_oid.len(), 12);
+        assert_eq!(result.parent_oids, Vec::<String>::new());
+        assert_eq!(result.affected_paths, vec!["idea.md"]);
+        assert_eq!(result.affected_file_count, 1);
+        assert_eq!(
+            git_stdout(temp.path(), &["rev-parse", "--verify", "HEAD"]),
+            result.commit_oid
+        );
+        assert_eq!(
+            git_stdout(temp.path(), &["log", "--format=%s", "-n", "1"]),
+            "Save local snapshot"
+        );
+        assert!(!result.status.has_changes);
+        assert!(result.status.entries.is_empty());
+    }
+
+    #[test]
+    fn snapshots_all_eligible_workspace_changes_without_staging_ignored_files() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join(".gitignore"), "ignored.md\n").unwrap();
+        commit_all(temp.path(), "Ignore rules");
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        fs::write(temp.path().join("ignored.md"), "# Ignored").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        assert_eq!(status.counts.untracked, 1);
+        assert_eq!(status.counts.ignored, 1);
+
+        let result = service()
+            .create_snapshot(&record, snapshot_request(&record, &status, "Save idea"))
+            .unwrap();
+
+        assert_eq!(result.affected_paths, vec!["idea.md"]);
+        assert!(git_stdout(temp.path(), &["ls-files"])
+            .lines()
+            .any(|path| path == "idea.md"));
+        assert!(!git_stdout(temp.path(), &["ls-files"])
+            .lines()
+            .any(|path| path == "ignored.md"));
+    }
+
+    #[test]
+    fn snapshot_scope_paths_stage_only_explicit_eligible_files() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        fs::write(temp.path().join("one.md"), "# One").unwrap();
+        fs::write(temp.path().join("two.md"), "# Two").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        let mut request = snapshot_request(&record, &status, "Save one");
+        request.scope_paths = vec!["one.md".to_owned()];
+
+        let result = service().create_snapshot(&record, request).unwrap();
+
+        assert_eq!(result.affected_paths, vec!["one.md"]);
+        assert_eq!(result.status.counts.untracked, 1);
+        assert_eq!(result.status.entries[0].relative_path, "two.md");
+        assert_eq!(git_stdout(temp.path(), &["ls-files"]), "one.md");
+    }
+
+    #[test]
+    fn returns_no_changes_for_clean_or_ignored_only_snapshots() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join(".gitignore"), "ignored.md\n").unwrap();
+        commit_all(temp.path(), "Ignore rules");
+        let record = record_for(temp.path());
+        let clean_status = service().status(&record).unwrap();
+        let clean_error = service()
+            .create_snapshot(
+                &record,
+                snapshot_request(&record, &clean_status, "Clean snapshot"),
+            )
+            .unwrap_err();
+        assert_eq!(clean_error.code, GitOperationErrorCode::NoChanges);
+
+        fs::write(temp.path().join("ignored.md"), "# Ignored").unwrap();
+        let ignored_status = service().status(&record).unwrap();
+        assert_eq!(ignored_status.counts.ignored, 1);
+        assert!(!ignored_status.has_changes);
+
+        let ignored_error = service()
+            .create_snapshot(
+                &record,
+                snapshot_request(&record, &ignored_status, "Ignored snapshot"),
+            )
+            .unwrap_err();
+        assert_eq!(ignored_error.code, GitOperationErrorCode::NoChanges);
+    }
+
+    #[test]
+    fn blocks_snapshot_when_repository_token_is_stale() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        fs::write(temp.path().join("later.md"), "# Later").unwrap();
+
+        let error = service()
+            .create_snapshot(&record, snapshot_request(&record, &status, "Stale"))
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::ExternalStateChanged);
+    }
+
+    #[test]
+    fn blocks_snapshot_without_author_identity() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        git(temp.path(), &["config", "user.name", ""]);
+        git(temp.path(), &["config", "user.email", ""]);
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        let mut request = snapshot_request(&record, &status, "Missing identity");
+        request.author = None;
+
+        let error = service().create_snapshot(&record, request).unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::IdentityMissing);
+    }
+
+    #[test]
+    fn blocks_snapshot_for_detached_head_and_merge_states() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        commit_all(temp.path(), "Initial");
+        let head = git_stdout(temp.path(), &["rev-parse", "HEAD"]);
+        git(temp.path(), &["checkout", "--quiet", &head]);
+        fs::write(temp.path().join("idea.md"), "# Changed").unwrap();
+        let record = record_for(temp.path());
+        let detached_status = service().status(&record).unwrap();
+
+        let error = service()
+            .create_snapshot(
+                &record,
+                snapshot_request(&record, &detached_status, "Detached"),
+            )
+            .unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::DetachedHead);
+
+        let merge_temp = tempfile::tempdir().unwrap();
+        git(merge_temp.path(), &["init", "--quiet"]);
+        configure_identity(merge_temp.path());
+        fs::write(merge_temp.path().join(".git").join("MERGE_HEAD"), &head).unwrap();
+        fs::write(merge_temp.path().join("idea.md"), "# Merge").unwrap();
+        let merge_record = record_for(merge_temp.path());
+        let merge_status = service().status(&merge_record).unwrap();
+        let merge_error = service()
+            .create_snapshot(
+                &merge_record,
+                snapshot_request(&merge_record, &merge_status, "Merge"),
+            )
+            .unwrap_err();
+
+        assert_eq!(merge_error.code, GitOperationErrorCode::MergeConflict);
+    }
+
+    #[test]
+    fn rejects_unsafe_snapshot_scope_paths() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
+        let record = record_for(temp.path());
+        let status = service().status(&record).unwrap();
+        let mut request = snapshot_request(&record, &status, "Unsafe");
+        request.scope_paths = vec![".git/config".to_owned()];
+
+        let error = service().create_snapshot(&record, request).unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::PermissionDenied);
     }
 
     #[test]
@@ -949,11 +2148,7 @@ mod tests {
     fn classifies_detached_head() {
         let temp = tempfile::tempdir().unwrap();
         git(temp.path(), &["init", "--quiet"]);
-        git(
-            temp.path(),
-            &["config", "user.email", "test@example.invalid"],
-        );
-        git(temp.path(), &["config", "user.name", "Test User"]);
+        configure_identity(temp.path());
         fs::write(temp.path().join("idea.md"), "# Idea").unwrap();
         git(temp.path(), &["add", "idea.md"]);
         git(temp.path(), &["commit", "--quiet", "-m", "Initial"]);

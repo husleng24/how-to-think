@@ -109,6 +109,17 @@ Snapshot and restore requests must echo the last observed token. Restore also
 requires the current VIT-47 `FileVersion` for the target file. Snapshot requires
 expected file versions for the scoped files being captured.
 
+## Status and Snapshot Result Shape
+
+`GitStatusSummary` reports UI-ready workspace-relative entries and summary
+counts for `added`, `modified`, `deleted`, `renamed`, `untracked`, and
+`ignored` Markdown workspace files. Ignored files can be shown in status, but
+they are not eligible for snapshot staging.
+
+`GitSnapshotResult` returns the full commit oid, a short commit oid, parent
+oids, snapshot message, affected workspace-relative paths, affected file count,
+the refreshed repository state, and the refreshed status after commit creation.
+
 ## Path Handling
 
 Every public Git request path is a workspace-relative path using `/`

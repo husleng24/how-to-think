@@ -14,7 +14,9 @@ import type {
   GitRepositoryState,
   GitRepositoryStateToken,
   GitRestoreRequest,
+  GitSnapshotResult,
   GitSnapshotRequest,
+  GitStatusSummary,
 } from './types';
 
 const sampleToken: GitRepositoryStateToken = {
@@ -175,6 +177,71 @@ describe('Git service contract', () => {
     ]);
     expect(gitMethodRequiresExpectedRepoToken('snapshot')).toBe(true);
     expect(gitMethodRequiresExpectedRepoToken('restore')).toBe(true);
+  });
+
+  it('models status counts and snapshot result metadata needed by the UI', () => {
+    const repositoryState: GitRepositoryState = {
+      workspaceId: 'workspace-1',
+      state: 'valid_repository',
+      backend: {
+        kind: 'system_git',
+        version: 'git version 2.52.0.windows.1',
+      },
+      selectedRootDisplayPath: 'C:/Users/example/notes',
+      repositoryRootDisplayPath: 'C:/Users/example/notes',
+      branchName: 'main',
+      headOid: sampleToken.headOid,
+      token: sampleToken,
+      warnings: [],
+      checkedAt: '2026-05-11T00:00:01.000Z',
+    };
+    const status: GitStatusSummary = {
+      workspaceId: 'workspace-1',
+      repositoryState,
+      token: sampleToken,
+      entries: [
+        {
+          relativePath: 'notes/idea.md',
+          staged: 'unmodified',
+          unstaged: 'modified',
+          conflicted: false,
+        },
+      ],
+      counts: {
+        added: 0,
+        modified: 1,
+        deleted: 0,
+        renamed: 0,
+        untracked: 0,
+        ignored: 0,
+      },
+      hasChanges: true,
+      hasConflicts: false,
+      changedFileCount: 1,
+      untrackedFileCount: 0,
+      refreshedAt: '2026-05-11T00:00:02.000Z',
+    };
+    const result: GitSnapshotResult = {
+      workspaceId: 'workspace-1',
+      commitOid: 'abcdef1234567890abcdef1234567890abcdef12',
+      shortCommitOid: 'abcdef123456',
+      parentOids: [],
+      message: 'Save idea',
+      affectedPaths: ['notes/idea.md'],
+      affectedFileCount: 1,
+      repositoryState,
+      status: {
+        ...status,
+        entries: [],
+        hasChanges: false,
+        changedFileCount: 0,
+      },
+      snapshotAt: '2026-05-11T00:00:03.000Z',
+    };
+
+    expect(status.counts.modified).toBe(1);
+    expect(result.shortCommitOid).toHaveLength(12);
+    expect(result.affectedPaths).toEqual(['notes/idea.md']);
   });
 
   it('detects stale repository tokens across head, index, and worktree generation changes', () => {

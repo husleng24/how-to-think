@@ -79,6 +79,8 @@ pub fn run() {
             commands::delete_markdown_document,
             commands::git_detect_repository,
             commands::git_init_repository,
+            commands::git_status,
+            commands::git_create_snapshot,
             ai::providers::list_ai_providers,
             ai::providers::save_ai_provider,
             ai::providers::select_ai_provider,

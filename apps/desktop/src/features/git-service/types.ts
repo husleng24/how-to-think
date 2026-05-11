@@ -106,11 +106,21 @@ export interface GitStatusEntry {
   conflicted: boolean;
 }
 
+export interface GitStatusCounts {
+  added: number;
+  modified: number;
+  deleted: number;
+  renamed: number;
+  untracked: number;
+  ignored: number;
+}
+
 export interface GitStatusSummary {
   workspaceId: WorkspaceId;
   repositoryState: GitRepositoryState;
   token: GitRepositoryStateToken | null;
   entries: readonly GitStatusEntry[];
+  counts: GitStatusCounts;
   hasChanges: boolean;
   hasConflicts: boolean;
   changedFileCount: number;
@@ -140,8 +150,11 @@ export interface GitSnapshotRequest {
 export interface GitSnapshotResult {
   workspaceId: WorkspaceId;
   commitOid: string;
+  shortCommitOid: string;
   parentOids: readonly string[];
   message: string;
+  affectedPaths: readonly WorkspaceRelativePath[];
+  affectedFileCount: number;
   repositoryState: GitRepositoryState;
   status: GitStatusSummary;
   snapshotAt: IsoDateTime;
