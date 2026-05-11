@@ -1,4 +1,5 @@
 use serde_json::Value;
+use std::fs;
 use std::process::{Command, Output};
 
 fn cli_output(args: &[&str]) -> Output {
@@ -14,6 +15,12 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8(output.stderr.clone()).expect("stderr should be UTF-8")
+}
+
+fn json_output(args: &[&str]) -> (Output, Value) {
+    let output = cli_output(args);
+    let envelope: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    (output, envelope)
 }
 
 #[test]
@@ -125,5 +132,313 @@ fn ui_review_json_returns_structured_handoff_without_prompting() {
     assert_eq!(
         envelope["ui_action"]["target"],
         "workspace:workspace-1/file:notes.md"
+    );
+}
+
+#[test]
+fn workspace_file_lifecycle_json_uses_shared_guards() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let (_, opened_workspace) = json_output(&[
+        "--json",
+        "workspace.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(opened_workspace["ok"], true);
+    assert_eq!(opened_workspace["operation_id"], "workspace.open");
+
+    let (_, created) = json_output(&[
+        "--json",
+        "workspace.file.create",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--content",
+        "# Plan\n\n[[Topic]]",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(created["ok"], true);
+    assert_eq!(created["data"]["relativePath"], "plan.md");
+
+    let (_, listed) = json_output(&[
+        "--json",
+        "workspace.files.list",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(listed["data"]["files"].as_array().unwrap().len(), 1);
+
+    let (_, opened) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(opened["ok"], true);
+    assert_eq!(opened["data"]["content"], "# Plan\n\n[[Topic]]");
+    let open_version = serde_json::to_string(&opened["data"]["version"]).unwrap();
+
+    let (_, saved) = json_output(&[
+        "--json",
+        "workspace.file.save",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--content",
+        "# Plan\n\n## Saved",
+        "--expected-version",
+        &open_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(saved["ok"], true);
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        "# Plan\n\n## Saved"
+    );
+    let saved_version = serde_json::to_string(&saved["data"]["version"]).unwrap();
+
+    let (rename_probe_output, rename_probe) = json_output(&[
+        "--json",
+        "workspace.file.rename",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--new-path",
+        "renamed.md",
+        "--expected-version",
+        &saved_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(rename_probe_output.status.code(), Some(30));
+    assert_eq!(rename_probe["error"]["code"], "confirmation_required");
+    let rename_token = rename_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, renamed) = json_output(&[
+        "--json",
+        "workspace.file.rename",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "plan.md",
+        "--new-path",
+        "renamed.md",
+        "--expected-version",
+        &saved_version,
+        "--confirm-token",
+        rename_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(renamed["ok"], true);
+    assert_eq!(renamed["data"]["newRelativePath"], "renamed.md");
+    let renamed_version = serde_json::to_string(&renamed["data"]["file"]["version"]).unwrap();
+
+    let (delete_probe_output, delete_probe) = json_output(&[
+        "--json",
+        "workspace.file.delete",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "renamed.md",
+        "--expected-version",
+        &renamed_version,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(delete_probe_output.status.code(), Some(30));
+    let delete_token = delete_probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, deleted) = json_output(&[
+        "--json",
+        "workspace.file.delete",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "renamed.md",
+        "--expected-version",
+        &renamed_version,
+        "--confirm-token",
+        delete_token,
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(deleted["ok"], true);
+    assert!(!workspace.join("renamed.md").exists());
+}
+
+#[test]
+fn markdown_parse_and_link_resolution_json_report_diagnostics() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(workspace.join("archive")).unwrap();
+    fs::write(
+        workspace.join("Current.md"),
+        "# Current\n\n## See [[Topic]] and [Deep](Topic.md#deep-thought)\n\nParagraph",
+    )
+    .unwrap();
+    fs::write(workspace.join("Topic.md"), "# Topic\n\n## Deep Thought").unwrap();
+
+    let (_, parsed) = json_output(&[
+        "--json",
+        "markdown.parse",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "Current.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(parsed["ok"], true);
+    assert_eq!(parsed["data"]["status"], "parsed");
+    assert!(parsed["data"]["diagnostics"].as_array().unwrap().len() >= 1);
+
+    let (_, resolved) = json_output(&[
+        "--json",
+        "markdown.links.resolve",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "Current.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(resolved["ok"], true);
+    assert_eq!(resolved["data"]["links"].as_array().unwrap().len(), 2);
+    assert!(resolved["data"]["links"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|link| link["status"] == "resolved"));
+
+    fs::write(workspace.join("archive").join("Topic.md"), "# Archived").unwrap();
+    let (_, ambiguous) = json_output(&[
+        "--json",
+        "markdown.links.resolve",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "Current.md",
+        "--link-target",
+        "Topic",
+        "--link-kind",
+        "wiki",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(ambiguous["data"]["links"][0]["status"], "ambiguous");
+    assert_eq!(
+        ambiguous["data"]["links"][0]["diagnostics"][0]["code"],
+        "ambiguous_target"
+    );
+}
+
+#[test]
+fn invalid_path_and_invalid_utf8_return_typed_json_errors() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+
+    let (path_output, path_error) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "../outside.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(path_output.status.code(), Some(10));
+    assert_eq!(path_error["error"]["code"], "invalid_relative_path");
+
+    let (markdown_path_output, markdown_path_error) = json_output(&[
+        "--json",
+        "markdown.parse",
+        "--content",
+        "# Unsafe source",
+        "--path",
+        "../outside.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(markdown_path_output.status.code(), Some(10));
+    assert_eq!(
+        markdown_path_error["error"]["code"],
+        "invalid_relative_path"
+    );
+
+    fs::write(workspace.join("bad.md"), [0xff, 0xfe]).unwrap();
+    let (utf8_output, utf8_error) = json_output(&[
+        "--json",
+        "workspace.file.open",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--path",
+        "bad.md",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(utf8_output.status.code(), Some(10));
+    assert_eq!(utf8_error["error"]["code"], "validation_error");
+    assert_eq!(
+        utf8_error["error"]["details"]["workspaceCode"],
+        "InvalidUtf8"
     );
 }

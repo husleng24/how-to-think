@@ -1,8 +1,17 @@
 use crate::command_service::{
     CliErrorCode, CliResultEnvelope, CommandService, CommandServicePaths, DoctorCheckStatus,
-    DoctorReport, DoctorRequest, HelpData, UiActionRequest, VersionData,
+    DoctorReport, DoctorRequest, HelpData, MarkdownLinksResolveCliRequest, MarkdownParseCliRequest,
+    MarkdownSerializeCliRequest, UiActionRequest, VersionData, WorkspaceFileCreateRequest,
+    WorkspaceFileDeleteRequest, WorkspaceFileOpenRequest, WorkspaceFileRenameRequest,
+    WorkspaceFileSaveRequest, WorkspacePathRequest,
 };
 use crate::desktop_bridge::CliUiActionKind;
+use crate::links::model::{LinkKind, LinkReference};
+use crate::models::FileVersion;
+use how_to_think_markdown::{
+    MarkdownLineEnding, MindMapDocument, ParseMode, SerializePreservationPolicy,
+};
+use serde_json::Value;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -22,6 +31,20 @@ pub struct CliOptions {
     pub target: Option<String>,
     pub reason: Option<String>,
     pub confirmation_token: Option<String>,
+    pub relative_path: Option<String>,
+    pub new_relative_path: Option<String>,
+    pub content: Option<String>,
+    pub expected_version: Option<FileVersion>,
+    pub parse_mode: ParseMode,
+    pub document: Option<MindMapDocument>,
+    pub target_path: Option<String>,
+    pub preservation_policy: SerializePreservationPolicy,
+    pub line_ending: MarkdownLineEnding,
+    pub link_target: Option<String>,
+    pub link_kind: LinkKind,
+    pub link_label: Option<String>,
+    pub link_alias: Option<String>,
+    pub open_in_desktop: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,6 +52,21 @@ pub enum CliCommand {
     Help,
     Version,
     Doctor,
+    WorkspaceOpen,
+    WorkspaceCreate,
+    WorkspaceValidate,
+    WorkspaceRecentList,
+    WorkspaceFilesList,
+    WorkspaceFilesRefresh,
+    WorkspaceFileCreate,
+    WorkspaceFileOpen,
+    WorkspaceFileSave,
+    WorkspaceFileRename,
+    WorkspaceFileDelete,
+    MarkdownParse,
+    MarkdownCheck,
+    MarkdownSerialize,
+    MarkdownLinksResolve,
     UiOpen,
     UiFocus,
     UiReview,
@@ -87,6 +125,20 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut target = None;
     let mut reason = None;
     let mut confirmation_token = None;
+    let mut relative_path = None;
+    let mut new_relative_path = None;
+    let mut content = None;
+    let mut expected_version = None;
+    let mut parse_mode = ParseMode::Auto;
+    let mut document = None;
+    let mut target_path = None;
+    let mut preservation_policy = SerializePreservationPolicy::BlockLossy;
+    let mut line_ending = MarkdownLineEnding::Lf;
+    let mut link_target = None;
+    let mut link_kind = LinkKind::ObsidianWiki;
+    let mut link_label = None;
+    let mut link_alias = None;
+    let mut open_in_desktop = false;
     let mut command = None;
     let mut index = 0;
 
@@ -135,6 +187,86 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 confirmation_token = Some(value.to_owned());
                 index += 2;
             }
+            "--path" | "--file" => {
+                let value = required_value(args, index)?;
+                relative_path = Some(value.to_owned());
+                index += 2;
+            }
+            "--new-path" => {
+                let value = required_value(args, index)?;
+                new_relative_path = Some(value.to_owned());
+                index += 2;
+            }
+            "--target-path" => {
+                let value = required_value(args, index)?;
+                target_path = Some(value.to_owned());
+                index += 2;
+            }
+            "--content" | "--markdown" => {
+                let value = required_any_value(args, index)?;
+                content = Some(value.to_owned());
+                index += 2;
+            }
+            "--expected-version" => {
+                let value = required_value(args, index)?;
+                expected_version =
+                    Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                        code: CliErrorCode::InvalidArguments,
+                        message: format!(
+                            "Flag `--expected-version` must be FileVersion JSON: {error}"
+                        ),
+                    })?);
+                index += 2;
+            }
+            "--document-json" => {
+                let value = required_any_value(args, index)?;
+                document = Some(serde_json::from_str(value).map_err(|error| CliParseError {
+                    code: CliErrorCode::InvalidArguments,
+                    message: format!(
+                        "Flag `--document-json` must be MindMapDocument JSON: {error}"
+                    ),
+                })?);
+                index += 2;
+            }
+            "--parse-mode" => {
+                let value = required_value(args, index)?;
+                parse_mode = parse_parse_mode(value)?;
+                index += 2;
+            }
+            "--preservation-policy" => {
+                let value = required_value(args, index)?;
+                preservation_policy = parse_preservation_policy(value)?;
+                index += 2;
+            }
+            "--line-ending" => {
+                let value = required_value(args, index)?;
+                line_ending = parse_line_ending(value)?;
+                index += 2;
+            }
+            "--link-target" => {
+                let value = required_any_value(args, index)?;
+                link_target = Some(value.to_owned());
+                index += 2;
+            }
+            "--link-kind" => {
+                let value = required_value(args, index)?;
+                link_kind = parse_link_kind(value)?;
+                index += 2;
+            }
+            "--link-label" => {
+                let value = required_any_value(args, index)?;
+                link_label = Some(value.to_owned());
+                index += 2;
+            }
+            "--link-alias" => {
+                let value = required_any_value(args, index)?;
+                link_alias = Some(value.to_owned());
+                index += 2;
+            }
+            "--ui" | "--desktop" => {
+                open_in_desktop = true;
+                index += 1;
+            }
             "--help" | "-h" => {
                 command = set_command(command, CliCommand::Help)?;
                 index += 1;
@@ -166,6 +298,20 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         target,
         reason,
         confirmation_token,
+        relative_path,
+        new_relative_path,
+        content,
+        expected_version,
+        parse_mode,
+        document,
+        target_path,
+        preservation_policy,
+        line_ending,
+        link_target,
+        link_kind,
+        link_label,
+        link_alias,
+        open_in_desktop,
     })
 }
 
@@ -200,6 +346,47 @@ fn execute_options(options: CliOptions) -> CliExecution {
                 render_error(envelope, options.output_mode)
             }
         },
+        CliCommand::WorkspaceOpen
+        | CliCommand::WorkspaceCreate
+        | CliCommand::WorkspaceValidate
+        | CliCommand::WorkspaceRecentList
+        | CliCommand::WorkspaceFilesList
+        | CliCommand::WorkspaceFilesRefresh
+        | CliCommand::WorkspaceFileCreate
+        | CliCommand::WorkspaceFileOpen
+        | CliCommand::WorkspaceFileSave
+        | CliCommand::WorkspaceFileRename
+        | CliCommand::WorkspaceFileDelete
+        | CliCommand::MarkdownParse
+        | CliCommand::MarkdownCheck
+        | CliCommand::MarkdownSerialize
+        | CliCommand::MarkdownLinksResolve => match CommandServicePaths::resolve(
+            options.app_data_dir.clone(),
+            options.app_config_dir.clone(),
+        ) {
+            Ok(paths) => {
+                let service = CommandService::new(paths);
+                match command_envelope(&service, &options) {
+                    Ok(envelope) => render_envelope(envelope, options.output_mode),
+                    Err(error) => {
+                        let envelope = CliResultEnvelope::error(
+                            operation_id(options.command),
+                            error.code,
+                            error.message,
+                        );
+                        render_error(envelope, options.output_mode)
+                    }
+                }
+            }
+            Err(error) => {
+                let envelope = CliResultEnvelope::error(
+                    operation_id(options.command),
+                    error.code,
+                    error.message,
+                );
+                render_error(envelope, options.output_mode)
+            }
+        },
         CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => {
             match CommandServicePaths::resolve(
                 options.app_data_dir.clone(),
@@ -221,6 +408,155 @@ fn execute_options(options: CliOptions) -> CliExecution {
                 }
             }
         }
+    }
+}
+
+fn command_envelope(
+    service: &CommandService,
+    options: &CliOptions,
+) -> Result<CliResultEnvelope, CliParseError> {
+    match options.command {
+        CliCommand::WorkspaceOpen => Ok(service.open_workspace(WorkspacePathRequest {
+            workspace_path: options.workspace_path.clone(),
+            remember: true,
+        })),
+        CliCommand::WorkspaceCreate => Ok(service.create_workspace(WorkspacePathRequest {
+            workspace_path: options.workspace_path.clone(),
+            remember: true,
+        })),
+        CliCommand::WorkspaceValidate => Ok(service.validate_workspace(WorkspacePathRequest {
+            workspace_path: options.workspace_path.clone(),
+            remember: false,
+        })),
+        CliCommand::WorkspaceRecentList => Ok(service.list_recent_workspaces()),
+        CliCommand::WorkspaceFilesList => {
+            Ok(service.list_workspace_files(options.workspace_path.clone()))
+        }
+        CliCommand::WorkspaceFilesRefresh => {
+            Ok(service.refresh_workspace_files(options.workspace_path.clone()))
+        }
+        CliCommand::WorkspaceFileCreate => {
+            Ok(service.create_workspace_file(WorkspaceFileCreateRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: required_path(options)?,
+                content: options.content.clone(),
+                confirmation_token: options.confirmation_token.clone(),
+                non_interactive: options.non_interactive,
+            }))
+        }
+        CliCommand::WorkspaceFileOpen => {
+            Ok(service.open_workspace_file(WorkspaceFileOpenRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: required_path(options)?,
+                open_in_desktop: options.open_in_desktop,
+                non_interactive: options.non_interactive,
+            }))
+        }
+        CliCommand::WorkspaceFileSave => {
+            Ok(service.save_workspace_file(WorkspaceFileSaveRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: required_path(options)?,
+                content: options
+                    .content
+                    .clone()
+                    .ok_or_else(|| missing_flag("--content"))?,
+                expected_version: options
+                    .expected_version
+                    .clone()
+                    .ok_or_else(|| missing_flag("--expected-version"))?,
+                confirmation_token: options.confirmation_token.clone(),
+                non_interactive: options.non_interactive,
+            }))
+        }
+        CliCommand::WorkspaceFileRename => {
+            Ok(service.rename_workspace_file(WorkspaceFileRenameRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: required_path(options)?,
+                new_relative_path: options
+                    .new_relative_path
+                    .clone()
+                    .ok_or_else(|| missing_flag("--new-path"))?,
+                expected_version: options.expected_version.clone(),
+                confirmation_token: options.confirmation_token.clone(),
+                non_interactive: options.non_interactive,
+            }))
+        }
+        CliCommand::WorkspaceFileDelete => {
+            Ok(service.delete_workspace_file(WorkspaceFileDeleteRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: required_path(options)?,
+                expected_version: options.expected_version.clone(),
+                confirmation_token: options.confirmation_token.clone(),
+                non_interactive: options.non_interactive,
+            }))
+        }
+        CliCommand::MarkdownParse => Ok(service.parse_markdown_cli(MarkdownParseCliRequest {
+            workspace_path: options.workspace_path.clone(),
+            relative_path: options.relative_path.clone(),
+            markdown: options.content.clone(),
+            parse_mode: options.parse_mode,
+        })),
+        CliCommand::MarkdownCheck => Ok(service.check_markdown_cli(MarkdownParseCliRequest {
+            workspace_path: options.workspace_path.clone(),
+            relative_path: options.relative_path.clone(),
+            markdown: options.content.clone(),
+            parse_mode: options.parse_mode,
+        })),
+        CliCommand::MarkdownSerialize => {
+            Ok(service.serialize_markdown_cli(MarkdownSerializeCliRequest {
+                workspace_path: options.workspace_path.clone(),
+                relative_path: options.relative_path.clone(),
+                markdown: options.content.clone(),
+                document: options.document.clone(),
+                target_path: options
+                    .target_path
+                    .clone()
+                    .or_else(|| options.new_relative_path.clone()),
+                preservation_policy: options.preservation_policy,
+                line_ending: options.line_ending,
+            }))
+        }
+        CliCommand::MarkdownLinksResolve => {
+            let link = options.link_target.clone().map(|target| LinkReference {
+                kind: options.link_kind,
+                raw: None,
+                label: options.link_label.clone(),
+                target,
+                alias: options.link_alias.clone(),
+            });
+            Ok(
+                service.resolve_markdown_links_cli(MarkdownLinksResolveCliRequest {
+                    workspace_path: options.workspace_path.clone(),
+                    source_relative_path: required_path(options)?,
+                    link,
+                }),
+            )
+        }
+        _ => Err(CliParseError {
+            code: CliErrorCode::CommandUnavailable,
+            message: format!(
+                "Command `{}` is not available here.",
+                operation_id(options.command)
+            ),
+        }),
+    }
+}
+
+fn render_envelope(envelope: CliResultEnvelope, output_mode: OutputMode) -> CliExecution {
+    if !envelope.ok {
+        return render_error(envelope, output_mode);
+    }
+
+    let exit_code = envelope.exit_code();
+    let stdout = match output_mode {
+        OutputMode::Human => render_human_envelope_data(&envelope),
+        OutputMode::Json => serialize_envelope(&envelope),
+    };
+
+    CliExecution {
+        stdout,
+        stderr: String::new(),
+        exit_code,
     }
 }
 
@@ -294,6 +630,115 @@ fn render_human_error_message(envelope: &CliResultEnvelope) -> String {
     format!("Error: {message}")
 }
 
+fn render_human_envelope_data(envelope: &CliResultEnvelope) -> String {
+    let data = envelope.data.as_ref().unwrap_or(&Value::Null);
+
+    match envelope.operation_id.as_str() {
+        "workspace.open" | "workspace.create" => render_workspace_session(data),
+        "workspace.validate" => {
+            let workspace = &data["workspace"];
+            format!(
+                "Workspace valid: {}\nMarkdown files: {}\nWritable: {}",
+                text(workspace, "displayPath"),
+                data["file_count"]
+                    .as_u64()
+                    .or_else(|| data["fileCount"].as_u64())
+                    .unwrap_or_default(),
+                data["writable"].as_bool().unwrap_or(false)
+            )
+        }
+        "workspace.recent.list" => {
+            let mut output = String::new();
+            let remembered = text(data, "rememberedWorkspaceId");
+            if !remembered.is_empty() {
+                output.push_str(&format!("Remembered workspace: {remembered}\n"));
+            }
+            output.push_str("Recent workspaces:\n");
+            for workspace in data["recentWorkspaces"].as_array().into_iter().flatten() {
+                output.push_str(&format!("  {}\n", text(workspace, "displayPath")));
+            }
+            output
+        }
+        "workspace.files.list" | "workspace.files.refresh" => render_workspace_files(data),
+        "workspace.file.open" => text(data, "content").to_owned(),
+        "workspace.file.create" => format!(
+            "Created {} ({})",
+            text(data, "relativePath"),
+            text(&data["version"], "token")
+        ),
+        "workspace.file.save" => format!(
+            "Saved {} ({})",
+            text(data, "relativePath"),
+            text(&data["version"], "token")
+        ),
+        "workspace.file.rename" => format!(
+            "Renamed {} -> {}",
+            text(data, "relativePath"),
+            text(data, "newRelativePath")
+        ),
+        "workspace.file.delete" => format!("Deleted {}", text(data, "relativePath")),
+        "markdown.parse" | "markdown.check" => format!(
+            "Markdown status: {}\nDiagnostics: {}",
+            text(data, "status"),
+            data["diagnostics"].as_array().map_or(0, Vec::len)
+        ),
+        "markdown.serialize" => data["markdown"]
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| {
+                format!(
+                    "Serialization status: {}\nDiagnostics: {}",
+                    text(data, "status"),
+                    data["diagnostics"].as_array().map_or(0, Vec::len)
+                )
+            }),
+        "markdown.links.resolve" => render_link_resolutions(data),
+        _ => serde_json::to_string_pretty(data).expect("CLI data must serialize"),
+    }
+}
+
+fn render_workspace_session(data: &Value) -> String {
+    let workspace = &data["workspace"];
+    let file_count = data["files"].as_array().map_or(0, Vec::len);
+    format!(
+        "Workspace: {}\nMarkdown files: {}",
+        text(workspace, "displayPath"),
+        file_count
+    )
+}
+
+fn render_workspace_files(data: &Value) -> String {
+    let workspace = &data["workspace"];
+    let mut output = format!(
+        "Workspace: {}\nMarkdown files:\n",
+        text(workspace, "displayPath")
+    );
+    for file in data["files"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "  {:<40} {} bytes\n",
+            text(file, "relativePath"),
+            file["byteSize"].as_u64().unwrap_or_default()
+        ));
+    }
+    output
+}
+
+fn render_link_resolutions(data: &Value) -> String {
+    let mut output = format!("Source: {}\nLinks:\n", text(data, "sourceRelativePath"));
+    for link in data["links"].as_array().into_iter().flatten() {
+        output.push_str(&format!(
+            "  {:<12} {}\n",
+            text(link, "status"),
+            text(link, "target")
+        ));
+    }
+    output
+}
+
+fn text<'a>(value: &'a Value, key: &str) -> &'a str {
+    value[key].as_str().unwrap_or("")
+}
+
 fn ui_action_request(options: &CliOptions) -> UiActionRequest {
     let command_id = ui_operation_id(options.command).to_owned();
     let kind = match options.command {
@@ -337,6 +782,30 @@ fn ui_operation_id(command: CliCommand) -> &'static str {
         CliCommand::UiFocus => "ui.focus",
         CliCommand::UiReview => "ui.review",
         _ => "ui.open",
+    }
+}
+
+fn operation_id(command: CliCommand) -> &'static str {
+    match command {
+        CliCommand::Help => "help",
+        CliCommand::Version => "version",
+        CliCommand::Doctor => "diagnostics.doctor",
+        CliCommand::WorkspaceOpen => "workspace.open",
+        CliCommand::WorkspaceCreate => "workspace.create",
+        CliCommand::WorkspaceValidate => "workspace.validate",
+        CliCommand::WorkspaceRecentList => "workspace.recent.list",
+        CliCommand::WorkspaceFilesList => "workspace.files.list",
+        CliCommand::WorkspaceFilesRefresh => "workspace.files.refresh",
+        CliCommand::WorkspaceFileCreate => "workspace.file.create",
+        CliCommand::WorkspaceFileOpen => "workspace.file.open",
+        CliCommand::WorkspaceFileSave => "workspace.file.save",
+        CliCommand::WorkspaceFileRename => "workspace.file.rename",
+        CliCommand::WorkspaceFileDelete => "workspace.file.delete",
+        CliCommand::MarkdownParse => "markdown.parse",
+        CliCommand::MarkdownCheck => "markdown.check",
+        CliCommand::MarkdownSerialize => "markdown.serialize",
+        CliCommand::MarkdownLinksResolve => "markdown.links.resolve",
+        CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => ui_operation_id(command),
     }
 }
 
@@ -415,12 +884,81 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "help" => Ok(CliCommand::Help),
         "version" => Ok(CliCommand::Version),
         "doctor" | "diagnostics.doctor" => Ok(CliCommand::Doctor),
+        "workspace.open" => Ok(CliCommand::WorkspaceOpen),
+        "workspace.create" => Ok(CliCommand::WorkspaceCreate),
+        "workspace.validate" => Ok(CliCommand::WorkspaceValidate),
+        "workspace.recent.list" => Ok(CliCommand::WorkspaceRecentList),
+        "workspace.files.list" => Ok(CliCommand::WorkspaceFilesList),
+        "workspace.files.refresh" => Ok(CliCommand::WorkspaceFilesRefresh),
+        "workspace.file.create" => Ok(CliCommand::WorkspaceFileCreate),
+        "workspace.file.open" | "workspace.file.read" => Ok(CliCommand::WorkspaceFileOpen),
+        "workspace.file.save" | "workspace.file.write" => Ok(CliCommand::WorkspaceFileSave),
+        "workspace.file.rename" => Ok(CliCommand::WorkspaceFileRename),
+        "workspace.file.delete" => Ok(CliCommand::WorkspaceFileDelete),
+        "markdown.parse" => Ok(CliCommand::MarkdownParse),
+        "markdown.check" => Ok(CliCommand::MarkdownCheck),
+        "markdown.serialize" | "markdown.export-preview" => Ok(CliCommand::MarkdownSerialize),
+        "markdown.links.resolve" => Ok(CliCommand::MarkdownLinksResolve),
         "ui.open" => Ok(CliCommand::UiOpen),
         "ui.focus" => Ok(CliCommand::UiFocus),
         "ui.review" => Ok(CliCommand::UiReview),
         _ => Err(CliParseError {
             code: CliErrorCode::CommandUnavailable,
             message: format!("Unknown command `{value}`."),
+        }),
+    }
+}
+
+fn parse_parse_mode(value: &str) -> Result<ParseMode, CliParseError> {
+    match value {
+        "auto" => Ok(ParseMode::Auto),
+        "heading-only" | "heading_only" => Ok(ParseMode::HeadingOnly),
+        "list-only" | "list_only" => Ok(ParseMode::ListOnly),
+        "mixed" => Ok(ParseMode::Mixed),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported parse mode `{value}`."),
+        }),
+    }
+}
+
+fn parse_preservation_policy(value: &str) -> Result<SerializePreservationPolicy, CliParseError> {
+    match value {
+        "block-lossy" | "block_lossy" => Ok(SerializePreservationPolicy::BlockLossy),
+        "require-confirmation" | "require_confirmation" => {
+            Ok(SerializePreservationPolicy::RequireConfirmation)
+        }
+        "allow-lossy" | "allow_lossy" => Ok(SerializePreservationPolicy::AllowLossy),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported preservation policy `{value}`."),
+        }),
+    }
+}
+
+fn parse_line_ending(value: &str) -> Result<MarkdownLineEnding, CliParseError> {
+    match value {
+        "lf" => Ok(MarkdownLineEnding::Lf),
+        "crlf" => Ok(MarkdownLineEnding::Crlf),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported line ending `{value}`."),
+        }),
+    }
+}
+
+fn parse_link_kind(value: &str) -> Result<LinkKind, CliParseError> {
+    match value {
+        "standard" | "markdown" | "standard-markdown" | "standard_markdown" => {
+            Ok(LinkKind::StandardMarkdown)
+        }
+        "wiki" | "wikilink" | "obsidian" | "obsidian-wiki" | "obsidian_wiki" => {
+            Ok(LinkKind::ObsidianWiki)
+        }
+        "image" => Ok(LinkKind::Image),
+        _ => Err(CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Unsupported link kind `{value}`."),
         }),
     }
 }
@@ -468,6 +1006,30 @@ fn required_value(args: &[String], index: usize) -> Result<&str, CliParseError> 
     Ok(value)
 }
 
+fn required_any_value(args: &[String], index: usize) -> Result<&str, CliParseError> {
+    let flag = &args[index];
+    args.get(index + 1)
+        .map(String::as_str)
+        .ok_or_else(|| CliParseError {
+            code: CliErrorCode::InvalidArguments,
+            message: format!("Flag `{flag}` requires a value."),
+        })
+}
+
+fn required_path(options: &CliOptions) -> Result<String, CliParseError> {
+    options
+        .relative_path
+        .clone()
+        .ok_or_else(|| missing_flag("--path"))
+}
+
+fn missing_flag(flag: &str) -> CliParseError {
+    CliParseError {
+        code: CliErrorCode::InvalidArguments,
+        message: format!("Flag `{flag}` is required for this command."),
+    }
+}
+
 fn set_command(
     current: Option<CliCommand>,
     next: CliCommand,
@@ -489,6 +1051,16 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| value.to_string()).collect()
+    }
+
+    fn version_json() -> String {
+        serde_json::to_string(&FileVersion {
+            modified_at: "2026-05-10T00:00:00Z".to_owned(),
+            byte_size: 4,
+            content_hash: "a".repeat(64),
+            token: "token".to_owned(),
+        })
+        .unwrap()
     }
 
     #[test]
@@ -536,6 +1108,50 @@ mod tests {
         );
         assert_eq!(options.reason.as_deref(), Some("Review dirty state."));
         assert_eq!(options.confirmation_token.as_deref(), Some("confirm:test"));
+    }
+
+    #[test]
+    fn parses_workspace_file_save_options_and_markdown_content() {
+        let expected_version = version_json();
+        let options = parse_args(&args(&[
+            "--workspace",
+            "notes",
+            "workspace.file.save",
+            "--path",
+            "plan.md",
+            "--content",
+            "- task",
+            "--expected-version",
+            &expected_version,
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::WorkspaceFileSave);
+        assert_eq!(options.relative_path.as_deref(), Some("plan.md"));
+        assert_eq!(options.content.as_deref(), Some("- task"));
+        assert_eq!(options.expected_version.as_ref().unwrap().token, "token");
+    }
+
+    #[test]
+    fn parses_markdown_link_resolution_options() {
+        let options = parse_args(&args(&[
+            "markdown.links.resolve",
+            "--path",
+            "current.md",
+            "--link-target",
+            "Topic",
+            "--link-kind",
+            "wiki",
+            "--link-alias",
+            "Readable topic",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::MarkdownLinksResolve);
+        assert_eq!(options.relative_path.as_deref(), Some("current.md"));
+        assert_eq!(options.link_target.as_deref(), Some("Topic"));
+        assert_eq!(options.link_kind, LinkKind::ObsidianWiki);
+        assert_eq!(options.link_alias.as_deref(), Some("Readable topic"));
     }
 
     #[test]
