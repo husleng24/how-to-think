@@ -6,6 +6,10 @@ use crate::desktop_bridge::{
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
+use crate::git_contracts::{
+    GitOperationError, GitOperationErrorCode, GitRepositoryState, GitServiceOperation,
+};
+use crate::git_service;
 use crate::links::index::WorkspaceLinkIndex;
 use crate::links::model::{
     LinkIndexSnapshot, LinkResolution, ResolveLinkRequest, ResolveLinksRequest,
@@ -344,6 +348,26 @@ pub fn preview_ai_context_snapshot(
     build_context_snapshot(&record, request)
 }
 
+#[tauri::command]
+pub fn git_detect_repository(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<GitRepositoryState, GitOperationError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Detect, error))?;
+    git_service::detect_repository(&record)
+}
+
+#[tauri::command]
+pub fn git_init_repository(
+    app: AppHandle,
+    workspace_id: String,
+) -> Result<GitRepositoryState, GitOperationError> {
+    let record = workspace_record_for_id(&app, &workspace_id, WorkspaceOperation::ListFiles)
+        .map_err(|error| workspace_error_to_git_error(GitServiceOperation::Init, error))?;
+    git_service::enable_git_for_workspace(&record)
+}
+
 fn settings_store(
     app: &AppHandle,
     operation: WorkspaceOperation,
@@ -380,4 +404,24 @@ fn workspace_record_for_id(
     }
 
     Ok(record)
+}
+
+fn workspace_error_to_git_error(
+    operation: GitServiceOperation,
+    error: WorkspaceError,
+) -> GitOperationError {
+    let code = match error.code {
+        WorkspaceErrorCode::WorkspaceNotSelected | WorkspaceErrorCode::WorkspaceMissing => {
+            GitOperationErrorCode::NotRepository
+        }
+        WorkspaceErrorCode::PermissionDenied | WorkspaceErrorCode::WorkspaceUnwritable => {
+            GitOperationErrorCode::PermissionDenied
+        }
+        WorkspaceErrorCode::InvalidWorkspacePath | WorkspaceErrorCode::WorkspaceNotDirectory => {
+            GitOperationErrorCode::RepositoryCorrupt
+        }
+        _ => GitOperationErrorCode::UnknownGitError,
+    };
+
+    GitOperationError::new(code, operation, error.message, error.recoverable)
 }

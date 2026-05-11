@@ -10,6 +10,7 @@ pub mod errors;
 pub mod file_index;
 pub mod fs_watch;
 pub mod git_contracts;
+pub mod git_service;
 pub mod links;
 pub mod markdown_lifecycle;
 pub mod models;
@@ -76,6 +77,8 @@ pub fn run() {
             commands::save_markdown_document,
             commands::rename_markdown_document,
             commands::delete_markdown_document,
+            commands::git_detect_repository,
+            commands::git_init_repository,
             ai::providers::list_ai_providers,
             ai::providers::save_ai_provider,
             ai::providers::select_ai_provider,
