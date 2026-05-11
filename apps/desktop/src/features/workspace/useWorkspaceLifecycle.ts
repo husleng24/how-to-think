@@ -21,6 +21,7 @@ import type {
   PendingDocumentAction,
   RestoreActiveFromGitInput,
   ExternalChangeBatch,
+  GitRestoreActionResult,
   GitSnapshotActionResult,
   WorkspaceCommands,
   WorkspaceLifecycleState,
@@ -38,12 +39,14 @@ export interface WorkspaceLifecycleActions {
   refreshGitState(): Promise<void>;
   enableGit(): Promise<boolean>;
   createGitSnapshot(message: string): Promise<GitSnapshotActionResult>;
+  listGitHistory: WorkspaceCommands['listGitHistory'];
+  getGitDiff: WorkspaceCommands['getGitDiff'];
   requestCreateFile(relativePath: WorkspaceRelativePath): Promise<void>;
   requestOpenFile(relativePath: WorkspaceRelativePath): Promise<void>;
   requestRenameActive(newRelativePath: WorkspaceRelativePath): Promise<void>;
   requestDeleteActive(): Promise<void>;
   requestCloseActive(): void;
-  restoreActiveFromGit(input: RestoreActiveFromGitInput): Promise<boolean>;
+  restoreActiveFromGit(input: RestoreActiveFromGitInput): Promise<GitRestoreActionResult>;
   continuePromptAfterSave(): Promise<void>;
   discardPrompt(): Promise<void>;
   cancelPrompt(): void;
@@ -211,6 +214,94 @@ export function useWorkspaceLifecycle(
     };
   }, [commands, refreshGitStateDirect]);
 
+  const restoreActiveFromGitDirect = useCallback(
+    async (
+      input: RestoreActiveFromGitInput,
+      options: { bypassDirtyGuard?: boolean } = {},
+    ): Promise<GitRestoreActionResult> => {
+      const current = stateRef.current;
+      const active = current.active;
+
+      if (!current.workspace || !active || active.inFlightSave) {
+        return {
+          ok: false,
+          error: {
+            code: 'restore_conflict',
+            operation: 'restore',
+            message: 'Restore is unavailable until the active Markdown file is ready.',
+            recoverable: true,
+            relativePath: active?.snapshot.relativePath,
+          },
+        };
+      }
+
+      if (!options.bypassDirtyGuard && hasUnsavedChanges(current)) {
+        dispatch({
+          type: 'prompt-opened',
+          prompt: createUnsavedPrompt(current, {
+            type: 'restore-from-git',
+            sourceRef: input.sourceRef,
+            expectedRepoToken: input.expectedRepoToken,
+          }),
+        });
+        return { ok: false, pendingPrompt: true };
+      }
+
+      if (
+        current.gitStatus?.token &&
+        isRepositoryTokenStale(input.expectedRepoToken, current.gitStatus.token)
+      ) {
+        const error = {
+          code: 'external_state_changed',
+          operation: 'restore',
+          message: 'The repository changed after the restore view was loaded.',
+          recoverable: true,
+          relativePath: active.snapshot.relativePath,
+        };
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+
+      if (current.saveStatus.kind === 'conflict' || current.saveStatus.kind === 'missing') {
+        const error = {
+          code: 'restore_conflict',
+          operation: 'restore',
+          message: 'Refresh or reopen the Markdown file before restoring from Git history.',
+          recoverable: true,
+          relativePath: active.snapshot.relativePath,
+        };
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+
+      dispatch({ type: 'operation-started' });
+
+      try {
+        const result = await commands.restoreMarkdownFromGit({
+          workspaceId: current.workspace.id,
+          relativePath: active.snapshot.relativePath,
+          sourceRef: input.sourceRef,
+          expectedRepoToken: input.expectedRepoToken,
+          expectedFileVersion: active.snapshot.version,
+          editorHasUnsavedChanges: false,
+        });
+        const payload = await openDocumentForEditor(commands, current.workspace.id, result.relativePath);
+
+        dispatch({
+          type: 'document-restored',
+          payload,
+          gitStatus: result.status,
+        });
+        await commands.rememberLastOpenedFile(current.workspace.id, result.relativePath);
+        return { ok: true, result };
+      } catch (error) {
+        dispatch({ type: 'operation-failed', error });
+        return { ok: false, error };
+      }
+    },
+    [commands],
+  );
+
   const performAction = useCallback(
     async (action: PendingDocumentAction, bypassGuard = false) => {
       const current = stateRef.current;
@@ -242,6 +333,11 @@ export function useWorkspaceLifecycle(
         } catch (error) {
           dispatch({ type: 'operation-failed', error });
         }
+        return;
+      }
+
+      if (action.type === 'restore-from-git') {
+        await restoreActiveFromGitDirect(action, { bypassDirtyGuard: true });
         return;
       }
 
@@ -305,7 +401,7 @@ export function useWorkspaceLifecycle(
 
       dispatch({ type: 'document-closed' });
     },
-    [commands, openFileDirect, refreshGitStateDirect],
+    [commands, openFileDirect, refreshGitStateDirect, restoreActiveFromGitDirect],
   );
 
   const saveActive = useCallback(
@@ -380,74 +476,6 @@ export function useWorkspaceLifecycle(
       }
     },
     [commands, refreshGitStateDirect],
-  );
-
-  const restoreActiveFromGit = useCallback(
-    async (input: RestoreActiveFromGitInput) => {
-      const current = stateRef.current;
-      const active = current.active;
-
-      if (!current.workspace || !active || active.inFlightSave) {
-        return false;
-      }
-
-      if (hasUnsavedChanges(current)) {
-        dispatch({
-          type: 'operation-failed',
-          error: {
-            code: 'restore_conflict',
-            operation: 'restore',
-            message: 'Restore is blocked while the editor has unsaved changes.',
-            recoverable: true,
-            relativePath: active.snapshot.relativePath,
-          },
-        });
-        return false;
-      }
-
-      if (
-        current.gitStatus?.token &&
-        isRepositoryTokenStale(input.expectedRepoToken, current.gitStatus.token)
-      ) {
-        dispatch({
-          type: 'operation-failed',
-          error: {
-            code: 'external_state_changed',
-            operation: 'restore',
-            message: 'The repository changed after the restore view was loaded.',
-            recoverable: true,
-            relativePath: active.snapshot.relativePath,
-          },
-        });
-        return false;
-      }
-
-      dispatch({ type: 'operation-started' });
-
-      try {
-        const result = await commands.restoreMarkdownFromGit({
-          workspaceId: current.workspace.id,
-          relativePath: active.snapshot.relativePath,
-          sourceRef: input.sourceRef,
-          expectedRepoToken: input.expectedRepoToken,
-          expectedFileVersion: active.snapshot.version,
-          editorHasUnsavedChanges: false,
-        });
-        const payload = await openDocumentForEditor(commands, current.workspace.id, result.relativePath);
-
-        dispatch({
-          type: 'document-restored',
-          payload,
-          gitStatus: result.status,
-        });
-        await commands.rememberLastOpenedFile(current.workspace.id, result.relativePath);
-        return true;
-      } catch (error) {
-        dispatch({ type: 'operation-failed', error });
-        return false;
-      }
-    },
-    [commands],
   );
 
   const enableGit = useCallback(async () => {
@@ -574,6 +602,10 @@ export function useWorkspaceLifecycle(
 
       createGitSnapshot,
 
+      listGitHistory: commands.listGitHistory,
+
+      getGitDiff: commands.getGitDiff,
+
       requestCreateFile(relativePath) {
         return performAction({ type: 'create-file', relativePath: normalizeMarkdownPath(relativePath) });
       },
@@ -605,7 +637,7 @@ export function useWorkspaceLifecycle(
         dispatch({ type: 'document-closed' });
       },
 
-      restoreActiveFromGit,
+      restoreActiveFromGit: restoreActiveFromGitDirect,
 
       async continuePromptAfterSave() {
         const prompt = stateRef.current.prompt;
@@ -651,7 +683,7 @@ export function useWorkspaceLifecycle(
       performAction,
       refreshGitStateDirect,
       refreshGitStateForCurrentWorkspace,
-      restoreActiveFromGit,
+      restoreActiveFromGitDirect,
       saveActive,
     ],
   );

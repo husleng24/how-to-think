@@ -13,6 +13,8 @@ import type {
   WorkspaceRelativePath,
 } from '../../types/markdownLifecycle';
 import type {
+  GitDiffResult,
+  GitHistoryEntry,
   GitRepositoryState,
   GitRestoreResult,
   GitSnapshotResult,
@@ -55,6 +57,14 @@ export const tauriWorkspaceCommands: WorkspaceCommands = {
 
   createGitSnapshot(input) {
     return invoke<GitSnapshotResult>('git_create_snapshot', { request: input });
+  },
+
+  listGitHistory(input) {
+    return invoke<GitHistoryEntry[]>('git_history', { request: input });
+  },
+
+  getGitDiff(input) {
+    return invoke<GitDiffResult>('git_diff', { request: input });
   },
 
   startWorkspaceChangeDetection(workspaceId) {

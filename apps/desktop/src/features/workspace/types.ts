@@ -1,6 +1,10 @@
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import type {
   GitBlockedState,
+  GitDiffRequest,
+  GitDiffResult,
+  GitHistoryEntry,
+  GitHistoryRequest,
   GitOperationError,
   GitRepositoryState,
   GitRepositoryStateToken,
@@ -184,7 +188,12 @@ export type PendingDocumentAction =
   | { type: 'create-file'; relativePath: WorkspaceRelativePath }
   | { type: 'rename-file'; newRelativePath: WorkspaceRelativePath }
   | { type: 'delete-file' }
-  | { type: 'close-file' };
+  | { type: 'close-file' }
+  | {
+      type: 'restore-from-git';
+      sourceRef: string;
+      expectedRepoToken: GitRepositoryStateToken;
+    };
 
 export interface UnsavedPromptState {
   action: PendingDocumentAction;
@@ -235,6 +244,8 @@ export interface WorkspaceCommands {
   refreshGitState(workspaceId: WorkspaceId): Promise<GitStatusSummary>;
   initializeGitRepository(workspaceId: WorkspaceId): Promise<GitRepositoryState>;
   createGitSnapshot(input: GitSnapshotRequest): Promise<GitSnapshotResult>;
+  listGitHistory(input: GitHistoryRequest): Promise<GitHistoryEntry[]>;
+  getGitDiff(input: GitDiffRequest): Promise<GitDiffResult>;
   startWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
   refreshWorkspaceExternalChanges(workspaceId: WorkspaceId): Promise<ExternalChangeBatch>;
   stopWorkspaceChangeDetection(workspaceId: WorkspaceId): Promise<void>;
@@ -287,3 +298,8 @@ export type GitOperationFailure = GitOperationError;
 export type GitSnapshotActionResult =
   | { ok: true; result: GitSnapshotResult }
   | { ok: false; error: unknown };
+
+export type GitRestoreActionResult =
+  | { ok: true; result: GitRestoreResult }
+  | { ok: false; error: unknown }
+  | { ok: false; pendingPrompt: true };

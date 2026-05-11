@@ -8,7 +8,9 @@ import {
   gitMethodRequiresExpectedRepoToken,
   gitOperationPolicy,
   getGitSnapshotEligibility,
+  getGitRestoreEligibility,
   groupGitStatusEntries,
+  isFileVersionStale,
   isGitOperationAllowed,
   isRepositoryTokenStale,
   validateGitRestoreRequestContract,
@@ -555,6 +557,73 @@ describe('Git service contract', () => {
         hasUnsavedEditorChanges: true,
       }).disabledReasons.map((reason) => reason.code),
     ).toContain('unsaved_editor_changes');
+  });
+
+  it('derives restore disabled reasons for stale, dirty, scoped, and blocked states', () => {
+    const dirtyStatus = gitStatusSummary('notes/plan.md');
+
+    expect(
+      getGitRestoreEligibility({
+        workspaceId: 'workspace-1',
+        activeRelativePath: 'notes/plan.md',
+        isFileHistoryScope: true,
+        status: dirtyStatus,
+        expectedRepoToken: sampleToken,
+        currentRepoToken: sampleToken,
+        expectedFileVersion: sampleFileVersion,
+        currentFileVersion: sampleFileVersion,
+      }),
+    ).toMatchObject({ canRestore: true });
+
+    expect(
+      getGitRestoreEligibility({
+        workspaceId: 'workspace-1',
+        activeRelativePath: 'notes/plan.md',
+        isFileHistoryScope: false,
+        status: dirtyStatus,
+        expectedRepoToken: sampleToken,
+        currentRepoToken: sampleToken,
+        expectedFileVersion: sampleFileVersion,
+        currentFileVersion: sampleFileVersion,
+        hasUnsavedEditorChanges: true,
+      }).disabledReasons.map((reason) => reason.code),
+    ).toEqual(['file_history_required', 'unsaved_editor_changes']);
+
+    expect(
+      getGitRestoreEligibility({
+        workspaceId: 'workspace-1',
+        activeRelativePath: 'notes/plan.md',
+        isFileHistoryScope: true,
+        status: {
+          ...dirtyStatus,
+          repositoryState: {
+            ...dirtyStatus.repositoryState,
+            state: 'merge_conflict',
+            blockedReason: 'merge_conflict',
+          },
+          hasConflicts: true,
+        },
+        expectedRepoToken: sampleToken,
+        currentRepoToken: sampleToken,
+        expectedFileVersion: sampleFileVersion,
+        currentFileVersion: sampleFileVersion,
+      }).disabledReasons.map((reason) => reason.code),
+    ).toEqual(['repository_blocked']);
+
+    expect(
+      getGitRestoreEligibility({
+        workspaceId: 'workspace-1',
+        activeRelativePath: 'notes/plan.md',
+        isFileHistoryScope: true,
+        status: dirtyStatus,
+        expectedRepoToken: sampleToken,
+        currentRepoToken: { ...sampleToken, token: 'changed-token' },
+        expectedFileVersion: sampleFileVersion,
+        currentFileVersion: { ...sampleFileVersion, token: 'changed-file' },
+      }).disabledReasons.map((reason) => reason.code),
+    ).toEqual(['stale_repository_state', 'stale_file_state']);
+    expect(isFileVersionStale(sampleFileVersion, { ...sampleFileVersion })).toBe(false);
+    expect(isFileVersionStale(sampleFileVersion, { ...sampleFileVersion, contentHash: 'changed' })).toBe(true);
   });
 
   it('builds snapshot requests from eligible status entries and current file versions', () => {

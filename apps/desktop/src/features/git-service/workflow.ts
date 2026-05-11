@@ -1,4 +1,9 @@
-import type { WorkspaceFile, WorkspaceId, WorkspaceRelativePath } from '../../types/markdownLifecycle';
+import type {
+  FileVersion,
+  WorkspaceFile,
+  WorkspaceId,
+  WorkspaceRelativePath,
+} from '../../types/markdownLifecycle';
 import {
   gitOperationPolicy,
   isGitOperationAllowed,
@@ -7,6 +12,7 @@ import {
 import type {
   GitBlockedState,
   GitOperationErrorCode,
+  GitRepositoryStateToken,
   GitRepositoryStateKind,
   GitSnapshotRequest,
   GitStatusChangeKind,
@@ -47,6 +53,40 @@ export interface GitSnapshotEligibility {
   canCreateSnapshot: boolean;
   eligibleEntries: readonly GitStatusEntry[];
   disabledReasons: readonly GitSnapshotDisabledReason[];
+}
+
+export interface GitRestoreDisabledReason {
+  code:
+    | 'workspace_missing'
+    | 'active_file_missing'
+    | 'file_history_required'
+    | 'status_unavailable'
+    | 'git_not_enabled'
+    | 'repository_blocked'
+    | 'missing_repository_token'
+    | 'stale_repository_state'
+    | 'stale_file_state'
+    | 'unsaved_editor_changes';
+  message: string;
+}
+
+export interface GitRestoreEligibilityInput {
+  workspaceId?: WorkspaceId | null;
+  activeRelativePath?: WorkspaceRelativePath | null;
+  isFileHistoryScope?: boolean;
+  status?: GitStatusSummary | null;
+  blockedState?: GitBlockedState | null;
+  expectedRepoToken?: GitRepositoryStateToken | null;
+  currentRepoToken?: GitRepositoryStateToken | null;
+  expectedFileVersion?: FileVersion | null;
+  currentFileVersion?: FileVersion | null;
+  hasUnsavedEditorChanges?: boolean;
+  hasStaleOpenFile?: boolean;
+}
+
+export interface GitRestoreEligibility {
+  canRestore: boolean;
+  disabledReasons: readonly GitRestoreDisabledReason[];
 }
 
 const STATUS_GROUP_ORDER: readonly GitStatusGroupKind[] = [
@@ -280,6 +320,120 @@ export function getGitSnapshotEligibility(
   };
 }
 
+export function getGitRestoreEligibility(
+  input: GitRestoreEligibilityInput,
+): GitRestoreEligibility {
+  const disabledReasons: GitRestoreDisabledReason[] = [];
+  const status = input.status ?? null;
+
+  if (!input.workspaceId) {
+    disabledReasons.push({
+      code: 'workspace_missing',
+      message: 'Open a workspace before viewing Git history.',
+    });
+    return { canRestore: false, disabledReasons };
+  }
+
+  if (!input.activeRelativePath) {
+    disabledReasons.push({
+      code: 'active_file_missing',
+      message: 'Open a Markdown file before restoring from history.',
+    });
+  }
+
+  if (!input.isFileHistoryScope) {
+    disabledReasons.push({
+      code: 'file_history_required',
+      message: 'Choose file history before restoring a Markdown version.',
+    });
+  }
+
+  if (!status) {
+    disabledReasons.push({
+      code: 'status_unavailable',
+      message: 'Refresh Git status before restoring from history.',
+    });
+    return { canRestore: false, disabledReasons };
+  }
+
+  const repositoryState = status.repositoryState.state;
+
+  if (repositoryState === 'not_repository') {
+    disabledReasons.push({
+      code: 'git_not_enabled',
+      message: 'Enable Git before restoring from history.',
+    });
+    return { canRestore: false, disabledReasons };
+  }
+
+  if (!isGitOperationAllowed(repositoryState, 'restore')) {
+    disabledReasons.push({
+      code: 'repository_blocked',
+      message: restoreBlockedMessage(repositoryState),
+    });
+  }
+
+  if (
+    (status.hasConflicts || input.blockedState?.kind === 'merge_conflict') &&
+    !disabledReasons.some((reason) => reason.code === 'repository_blocked')
+  ) {
+    disabledReasons.push({
+      code: 'repository_blocked',
+      message: 'Resolve merge conflicts before restoring from history.',
+    });
+  }
+
+  if (!input.expectedRepoToken || !input.currentRepoToken) {
+    disabledReasons.push({
+      code: 'missing_repository_token',
+      message: 'Refresh Git status before restoring from history.',
+    });
+  } else if (isRepositoryTokenStale(input.expectedRepoToken, input.currentRepoToken)) {
+    disabledReasons.push({
+      code: 'stale_repository_state',
+      message: 'Refresh Git status before retrying restore.',
+    });
+  }
+
+  if (
+    input.hasStaleOpenFile ||
+    isFileVersionStale(input.expectedFileVersion, input.currentFileVersion)
+  ) {
+    disabledReasons.push({
+      code: 'stale_file_state',
+      message: 'Refresh or reopen the Markdown file before restoring from history.',
+    });
+  }
+
+  if (input.hasUnsavedEditorChanges) {
+    disabledReasons.push({
+      code: 'unsaved_editor_changes',
+      message: 'Save or discard unsaved editor changes before restoring from history.',
+    });
+  }
+
+  return {
+    canRestore: disabledReasons.length === 0,
+    disabledReasons,
+  };
+}
+
+export function isFileVersionStale(
+  expected: FileVersion | null | undefined,
+  current: FileVersion | null | undefined,
+): boolean {
+  if (!expected || !current) {
+    return true;
+  }
+
+  return (
+    expected.token !== current.token ||
+    expected.contentHash !== current.contentHash ||
+    expected.byteSize !== current.byteSize ||
+    expected.modifiedAt !== current.modifiedAt
+  );
+}
+
 export function buildGitSnapshotRequest(input: {
   workspaceId: WorkspaceId;
   status: GitStatusSummary;
@@ -319,6 +473,12 @@ export function gitOperationErrorTitle(code: GitOperationErrorCode): string {
       return 'Git state changed';
     case 'no_changes':
       return 'No changes';
+    case 'invalid_ref':
+      return 'Revision not found';
+    case 'file_not_in_history':
+      return 'File not in history';
+    case 'restore_conflict':
+      return 'Restore blocked';
     case 'merge_conflict':
       return 'Merge conflict active';
     case 'detached_head':
@@ -363,6 +523,36 @@ function snapshotBlockedMessage(state: GitRepositoryStateKind): string {
   }
 
   return 'Git snapshots are unavailable for this repository state.';
+}
+
+function restoreBlockedMessage(state: GitRepositoryStateKind): string {
+  const policy = gitOperationPolicy(state, 'restore');
+
+  if (policy.blockedBy === 'merge_conflict') {
+    return 'Resolve merge conflicts before restoring files.';
+  }
+
+  if (policy.blockedBy === 'detached_head') {
+    return 'Check out a branch before restoring files.';
+  }
+
+  if (policy.blockedBy === 'git_unavailable') {
+    return 'Git is unavailable for this workspace.';
+  }
+
+  if (policy.blockedBy === 'repository_corrupt' || policy.blockedBy === 'bare_repository') {
+    return 'The Git repository metadata cannot be read safely.';
+  }
+
+  if (policy.blockedBy === 'permission_denied') {
+    return 'The workspace cannot be read or written with current permissions.';
+  }
+
+  if (policy.blockedBy === 'parent_repository') {
+    return 'Restore files only from the selected local workspace repository.';
+  }
+
+  return 'Git restore is unavailable for this repository state.';
 }
 
 function sortStatusEntries(entries: readonly GitStatusEntry[]): GitStatusEntry[] {
