@@ -26,6 +26,7 @@ import type {
   AiRun,
   AiRunEvent,
   AiSession,
+  AiSuggestionDraft,
 } from '../types';
 import { AiAssistantPanel } from './AiAssistantPanel';
 
@@ -232,6 +233,90 @@ describe('AiAssistantPanel', () => {
 
     expect(screen.getByText(/Answered using Selected node: Plan from editor revision 1/i)).toBeVisible();
   });
+
+  it('saves suggestion draft candidates without mutating editor state', async () => {
+    const client = createMockClient();
+    const onReviewSuggestionDraft = vi.fn();
+    const state = editorState();
+    const documentRef = state.document;
+    const historyRef = state.history;
+    const { workspaceState } = renderPanel({
+      client,
+      editor: state,
+      onReviewSuggestionDraft,
+    });
+
+    await screen.findByText('Selected node: Plan');
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Rewrite the selected branch with clearer steps.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Suggestion available')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
+
+    expect(await screen.findByText('Suggestion draft')).toBeVisible();
+    expect(state.document).toBe(documentRef);
+    expect(state.history).toBe(historyRef);
+    expect(state.isDirty).toBe(false);
+    expect(workspaceState.saveStatus.kind).toBe('saved');
+
+    fireEvent.click(screen.getByRole('button', { name: /review suggestion/i }));
+
+    expect(onReviewSuggestionDraft).toHaveBeenCalledTimes(1);
+    const draft = onReviewSuggestionDraft.mock.calls[0][0] as AiSuggestionDraft;
+    expect(draft.sourceMessageId).toBe('message-assistant-Rewrite the selected branch with clearer steps.');
+    expect(draft.targetContext.scope).toBe('selectedNode');
+    expect(draft.targetContext.documentPath).toBe('notes/plan.md');
+    expect(draft.rawAssistantContent).toBe('Assistant response');
+    expect(draft.warnings).toEqual([]);
+  });
+
+  it('does not offer suggestion draft controls for normal answers', async () => {
+    const client = createMockClient();
+
+    renderPanel({ client });
+
+    await screen.findByText('Selected node: Plan');
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Summarize this branch.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Assistant response')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /save as suggestion/i })).not.toBeInTheDocument();
+  });
+
+  it('shows mismatch warnings when saving a suggestion after the editor revision changed', async () => {
+    const client = createMockClient();
+    const { rerender, workspaceState, provider } = renderPanel({ client });
+
+    await screen.findByText('Selected node: Plan');
+    fireEvent.change(screen.getByLabelText(/prompt/i), {
+      target: { value: 'Improve the selected branch.' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /send/i }));
+
+    expect(await screen.findByText('Suggestion available')).toBeVisible();
+
+    rerender(
+      <AiAssistantPanel
+        open
+        editorState={editorState({ contentRevision: 2 })}
+        workspaceState={workspaceState}
+        providerController={provider}
+        client={client}
+        onClose={vi.fn()}
+        onOpenProviderSettings={vi.fn()}
+        onReviewSuggestionDraft={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
+
+    expect(await screen.findByText('Suggestion draft')).toBeVisible();
+    expect(screen.getByText('Document changed since this AI context was captured.')).toBeVisible();
+  });
 });
 
 interface MockClient extends AiConversationClient {
@@ -246,6 +331,7 @@ function renderPanel(input: {
   client?: MockClient;
   providerController?: AiProviderSettingsController;
   editor?: MindMapEditorState;
+  onReviewSuggestionDraft?: (draft: AiSuggestionDraft) => void;
 } = {}) {
   const fixture = createWorkspaceLifecycleFixture({
     markdownFiles: {
@@ -287,6 +373,7 @@ function renderPanel(input: {
         client={client}
         onClose={vi.fn()}
         onOpenProviderSettings={vi.fn()}
+        onReviewSuggestionDraft={input.onReviewSuggestionDraft}
       />,
     ),
     workspaceState,
@@ -400,7 +487,6 @@ function contextSnapshot(
     documentId: request.document?.id,
     documentPath: request.currentFile,
     documentRevision: `mindmap:${request.document?.version ?? 1}:content:${request.contentRevision ?? 1}`,
-    documentContentHash: 'hash',
     selectedNodeIds: request.selectedNodeId ? [request.selectedNodeId] : [],
     items: [
       {

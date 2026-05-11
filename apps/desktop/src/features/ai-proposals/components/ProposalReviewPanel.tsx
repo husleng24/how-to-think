@@ -177,6 +177,13 @@ export function ProposalReviewPanel({
         </section>
       ) : null}
 
+      {preview.rawDraftContent ? (
+        <section className="proposal-section" aria-label="Suggestion draft content">
+          <h3>Suggestion draft</h3>
+          <pre className="proposal-draft-content">{preview.rawDraftContent}</pre>
+        </section>
+      ) : null}
+
       {preview.affectedFiles.some((file) => file.beforeMarkdown || file.afterMarkdown) ? (
         <section className="proposal-section" aria-label="Markdown preview">
           <h3>Markdown preview</h3>

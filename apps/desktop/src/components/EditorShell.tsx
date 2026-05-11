@@ -18,9 +18,17 @@ import {
   AiProviderSettingsPanel,
   useAiProviderSettings,
 } from '../features/ai-assistant';
-import type { AiProviderSettingsController } from '../features/ai-assistant';
-import { createProposalReviewStore, ProposalReviewPanel } from '../features/ai-proposals';
-import type { ProposalReview, ProposalReviewStore } from '../features/ai-proposals';
+import type { AiProviderSettingsController, AiSuggestionDraft } from '../features/ai-assistant';
+import {
+  createProposalReviewDraftSourceFromAiSuggestionDraft,
+  createProposalReviewStore,
+  ProposalReviewPanel,
+} from '../features/ai-proposals';
+import type {
+  ProposalReview,
+  ProposalReviewEditorSnapshot,
+  ProposalReviewStore,
+} from '../features/ai-proposals';
 import {
   CompatibilityDiagnosticsPanel,
   resolveWorkspaceLink,
@@ -110,6 +118,20 @@ export function EditorShell({
   const [newMarkdownPath, setNewMarkdownPath] = useState('');
   const [markdownPathInput, setMarkdownPathInput] = useState(
     workspaceState?.active?.snapshot.relativePath ?? '',
+  );
+  const reviewSuggestionDraft = useCallback(
+    (draft: AiSuggestionDraft) => {
+      if (!workspaceState?.active) {
+        return;
+      }
+
+      proposalReviewStore.receiveSuggestionDraft(
+        createProposalReviewDraftSourceFromAiSuggestionDraft(draft),
+        createProposalReviewEditorSnapshot(editorState, workspaceState),
+      );
+      setIsAiAssistantOpen(false);
+    },
+    [editorState, proposalReviewStore, workspaceState],
   );
   const visibleOutlineNodes = layout.nodes.slice(0, 80);
   const hiddenOutlineCount = Math.max(0, layout.nodes.length - visibleOutlineNodes.length);
@@ -432,6 +454,7 @@ export function EditorShell({
         editorState={editorState}
         workspaceState={workspaceState}
         providerController={aiProviderController}
+        onReviewSuggestionDraft={reviewSuggestionDraft}
         onClose={() => setIsAiAssistantOpen(false)}
         onOpenProviderSettings={() => setIsAiAssistantOpen(false)}
       />
@@ -476,4 +499,40 @@ export function EditorShell({
       ) : null}
     </div>
   );
+}
+
+function createProposalReviewEditorSnapshot(
+  editorState: MindMapEditorState,
+  workspaceState: WorkspaceLifecycleState,
+): ProposalReviewEditorSnapshot {
+  const activeDocument = workspaceState.active;
+  const activeFilePath = activeDocument?.snapshot.relativePath ?? editorState.document.sourcePath ?? 'untitled.md';
+  const activeVersion = activeDocument?.snapshot.version ?? {
+    token: `editor:${editorState.contentRevision}`,
+    modifiedAt: editorState.document.updatedAt,
+    byteSize: 0,
+    contentHash: `editor:${editorState.contentRevision}`,
+  };
+  const fileVersions = Object.fromEntries(
+    workspaceState.files.map((file) => [file.relativePath, file.version]),
+  );
+
+  return {
+    document: editorState.document,
+    markdownBuffer: activeDocument?.snapshot.content ?? '',
+    markdownBuffersByPath: {
+      [activeFilePath]: activeDocument?.snapshot.content ?? '',
+    },
+    fileVersion: activeVersion,
+    fileVersions: {
+      ...fileVersions,
+      [activeFilePath]: activeVersion,
+    },
+    activeFilePath,
+    documentVersion: editorState.contentRevision,
+    isDirty: editorState.isDirty,
+    undoHistory: editorState.history,
+    selection: editorState.selection,
+    capturedAt: new Date().toISOString(),
+  };
 }

@@ -2,6 +2,7 @@ export * from './application/applyProposal';
 export * from './application/messageMapping';
 export * from './application/proposalPreviewAdapter';
 export * from './application/proposalReviewStore';
+export * from './application/suggestionDraftBridge';
 export * from './application/types';
 export * from './components/ProposalReviewPanel';
 export * from './domain/conversion';

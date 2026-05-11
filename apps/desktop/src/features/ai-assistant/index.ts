@@ -1,6 +1,7 @@
 export * from './application/contextSelectors';
 export * from './application/providerAvailability';
 export * from './application/providerSetup';
+export * from './application/suggestionDrafts';
 export * from './application/useAiProviderSettings';
 export * from './components/AiProviderSettingsPanel';
 export * from './components/AiAssistantPanel';

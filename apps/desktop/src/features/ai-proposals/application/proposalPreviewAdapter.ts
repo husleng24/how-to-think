@@ -39,6 +39,7 @@ export interface ProposalPreviewModel {
   unconfirmedRiskFlags: string[];
   canAccept: boolean;
   hasPartialAcceptance: false;
+  rawDraftContent?: string;
 }
 
 export function createProposalPreviewModel(review: ProposalReview): ProposalPreviewModel {
@@ -48,13 +49,19 @@ export function createProposalPreviewModel(review: ProposalReview): ProposalPrev
     : [];
 
   return {
-    title: proposal?.summary ?? review.invalidSource?.summary ?? 'AI proposal',
+    title: proposal?.summary ?? review.invalidSource?.summary ?? review.draftSource?.summary ?? 'AI proposal',
     source: review.sourceConversationId
       ? `Conversation ${review.sourceConversationId}`
       : 'AI conversation',
     statusLabel: toStatusLabel(review.status),
-    scopeLabel: proposal ? describeScope(proposal.targetScope) : 'Invalid proposal',
-    summary: proposal?.summary ?? review.invalidSource?.summary ?? 'Proposal could not be validated.',
+    scopeLabel: proposal
+      ? describeScope(proposal.targetScope)
+      : review.draftSource?.targetScopeLabel ?? 'Invalid proposal',
+    summary:
+      proposal?.summary ??
+      review.invalidSource?.summary ??
+      review.draftSource?.summary ??
+      'Proposal could not be validated.',
     affectedNodes: proposal ? listAffectedNodes(proposal) : [],
     affectedFiles,
     operations: proposal ? proposal.operations.map(createPreviewOperation) : [],
@@ -63,6 +70,7 @@ export function createProposalPreviewModel(review: ProposalReview): ProposalPrev
     unconfirmedRiskFlags: getUnconfirmedRiskFlags(review),
     canAccept: getAcceptDisabledMessages(review).length === 0,
     hasPartialAcceptance: false,
+    rawDraftContent: review.draftSource?.rawAssistantContent,
   };
 }
 

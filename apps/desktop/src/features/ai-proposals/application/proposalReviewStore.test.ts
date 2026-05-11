@@ -9,6 +9,7 @@ import {
   createMultiFileProposalFixture,
   createProposalFixtureContext,
   createProposalPreviewModel,
+  createProposalReviewDraftSourceFromAiSuggestionDraft,
   createProposalReview,
   createProposalReviewEditorSnapshot,
   createProposalReviewStore,
@@ -119,6 +120,60 @@ describe('proposal review lifecycle', () => {
     expect(editorState.document).toBe(snapshot.document);
     expect(editorState.history).toBe(snapshot.undoHistory);
     expect(editorState.selection).toBe(snapshot.selection);
+    expect(editorState.isDirty).toBe(false);
+  });
+
+  it('receives suggestion drafts as isolated review metadata without enabling apply', () => {
+    const editorState = createMindMapEditorState();
+    const snapshot = createProposalReviewEditorSnapshot({
+      document: editorState.document,
+      undoHistory: editorState.history,
+      selection: editorState.selection,
+    });
+    const store = createProposalReviewStore();
+    const review = store.receiveSuggestionDraft(
+      createProposalReviewDraftSourceFromAiSuggestionDraft({
+        id: 'draft-1',
+        sourceSessionId: 'session-1',
+        sourceMessageId: 'message-1',
+        sourceRunId: 'run-1',
+        sourcePrompt: 'Rewrite this branch.',
+        targetContext: {
+          workspaceId: 'workspace-1',
+          scope: 'selectedBranch',
+          displayLabel: 'Selected branch: Root',
+          documentId: 'doc-1',
+          documentPath: 'notes/root.md',
+          documentRevision: 'mindmap:1:content:1',
+          documentContentHash: 'hash-1',
+          selectedNodeIds: ['root'],
+          itemIds: ['item-1'],
+        },
+        rawAssistantContent: 'Suggested rewrite only.',
+        warnings: [
+          {
+            code: 'document_revision_mismatch',
+            message: 'Document changed since this AI context was captured.',
+            expectedRevision: 'mindmap:1:content:1',
+            currentRevision: 'mindmap:2:content:2',
+            relativePath: 'notes/root.md',
+          },
+        ],
+        createdAt: '2026-05-10T00:00:00Z',
+      }),
+      snapshot,
+    );
+    const preview = createProposalPreviewModel(review);
+
+    expect(review.status).toBe('draft');
+    expect(preview.canAccept).toBe(false);
+    expect(preview.rawDraftContent).toBe('Suggested rewrite only.');
+    expect(preview.messages.map((message) => message.code)).toContain('suggestion_draft_saved');
+    expect(preview.messages.map((message) => message.code)).toContain(
+      'suggestion_draft_revision_mismatch',
+    );
+    expect(review.editorSnapshot.document).toBe(editorState.document);
+    expect(review.editorSnapshot.undoHistory).toBe(editorState.history);
     expect(editorState.isDirty).toBe(false);
   });
 

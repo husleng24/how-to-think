@@ -272,6 +272,43 @@
   white-space: pre-wrap;
 }
 
+.ai-message-suggestion {
+  display: grid;
+  gap: 7px;
+  margin-top: 9px;
+  padding: 9px;
+  border: 1px solid #c9d7d2;
+  border-radius: 8px;
+  background: #fbfffd;
+}
+
+.ai-message-suggestion.draft {
+  border-color: #6c9a7c;
+}
+
+.ai-message-suggestion-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.ai-message-suggestion-heading strong {
+  color: #24573a;
+  font-size: 0.8rem;
+}
+
+.ai-message-suggestion-warnings {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #7c4b18;
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
 .ai-run-state {
   display: grid;
   grid-template-columns: 18px minmax(0, 1fr);

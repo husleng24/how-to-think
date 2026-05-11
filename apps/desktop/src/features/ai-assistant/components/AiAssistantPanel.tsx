@@ -17,6 +17,11 @@ import {
   selectDefaultAiContextScope,
 } from '../application/contextSelectors';
 import { getProviderRunAvailability } from '../application/providerAvailability';
+import {
+  classifyAiSuggestionDraftIntent,
+  createAiSuggestionDraft,
+  createCurrentAiSuggestionDraftDocument,
+} from '../application/suggestionDrafts';
 import type { AiProviderSettingsController } from '../application/useAiProviderSettings';
 import {
   tauriAiConversationClient,
@@ -28,10 +33,12 @@ import type {
   AiError,
   AiMessage,
   AiRun,
+  AiSuggestionDraft,
   WorkspaceRelativePath,
 } from '../types';
 import { ContextScopePicker } from './ContextScopePicker';
 import { ConversationThread } from './ConversationThread';
+import type { ConversationSuggestionDraftState } from './ConversationThread';
 import { ProviderSelector } from './ProviderSelector';
 import './AiAssistantPanel.css';
 
@@ -43,6 +50,7 @@ interface AiAssistantPanelProps {
   client?: AiConversationClient;
   onClose(): void;
   onOpenProviderSettings?: () => void;
+  onReviewSuggestionDraft?: (draft: AiSuggestionDraft) => void;
 }
 
 type PreviewState =
@@ -55,6 +63,12 @@ interface RunContextMarker {
   contextLabel: string;
   contentRevision: number;
   documentRevision?: string;
+}
+
+interface SuggestionDraftCandidate {
+  assistantMessage: AiMessage;
+  sourcePrompt: string;
+  context: AiContextSnapshot;
 }
 
 const emptyPreviewState: PreviewState = {
@@ -71,6 +85,7 @@ export function AiAssistantPanel({
   client = tauriAiConversationClient,
   onClose,
   onOpenProviderSettings,
+  onReviewSuggestionDraft,
 }: AiAssistantPanelProps) {
   const workspaceId = workspaceState?.workspace?.id ?? null;
   const activeDocument = workspaceState?.active ?? null;
@@ -91,6 +106,10 @@ export function AiAssistantPanel({
   const [lastError, setLastError] = useState<AiError | null>(null);
   const [sending, setSending] = useState(false);
   const [lastRunContext, setLastRunContext] = useState<RunContextMarker | null>(null);
+  const [suggestionDraftCandidates, setSuggestionDraftCandidates] = useState<
+    Record<string, SuggestionDraftCandidate>
+  >({});
+  const [suggestionDrafts, setSuggestionDrafts] = useState<Record<string, AiSuggestionDraft>>({});
   const [previewRefreshKey, setPreviewRefreshKey] = useState(0);
   const lastPromptRef = useRef<string | null>(null);
   const sessionIdRef = useRef<string | null>(null);
@@ -141,6 +160,26 @@ export function AiAssistantPanel({
       : '';
     return `Answered using ${lastRunContext.contextLabel} from editor revision ${lastRunContext.contentRevision}${backendRevision}; current editor is revision ${editorState.contentRevision}.`;
   }, [editorState.contentRevision, lastRunContext]);
+  const suggestionDraftThreadState = useMemo<Record<string, ConversationSuggestionDraftState>>(() => {
+    const threadState: Record<string, ConversationSuggestionDraftState> = {};
+
+    for (const [messageId, candidate] of Object.entries(suggestionDraftCandidates)) {
+      const draft = suggestionDrafts[messageId];
+      threadState[messageId] = draft
+        ? {
+            status: 'draft',
+            warnings: draft.warnings.map((warning) => warning.message),
+          }
+        : {
+            status: 'candidate',
+            warnings: candidate.context.truncated
+              ? ['Context content was truncated before this suggestion was generated.']
+              : [],
+          };
+    }
+
+    return threadState;
+  }, [suggestionDraftCandidates, suggestionDrafts]);
 
   useEffect(() => {
     if (!selectedProviderId) {
@@ -290,6 +329,17 @@ export function AiAssistantPanel({
         setMessages(response.session.messages);
         setActiveRun(response.run);
         setLastError(response.error ?? response.run.error ?? null);
+        const assistantMessage = response.assistantMessage;
+        if (assistantMessage && classifyAiSuggestionDraftIntent(trimmedPrompt).isSuggestionIntent) {
+          setSuggestionDraftCandidates((currentCandidates) => ({
+            ...currentCandidates,
+            [assistantMessage.id]: {
+              assistantMessage,
+              sourcePrompt: trimmedPrompt,
+              context,
+            },
+          }));
+        }
       } catch (error) {
         setLastError(toAiError(error));
         setActiveRun((currentRun) =>
@@ -341,6 +391,43 @@ export function AiAssistantPanel({
     void sendPrompt(lastPromptRef.current);
   }, [sendPrompt]);
 
+  const saveSuggestionDraft = useCallback(
+    (messageId: string) => {
+      const candidate = suggestionDraftCandidates[messageId];
+      if (!candidate) {
+        return;
+      }
+
+      const draft = createAiSuggestionDraft({
+        assistantMessage: candidate.assistantMessage,
+        sourcePrompt: candidate.sourcePrompt,
+        context: candidate.context,
+        currentDocument: createCurrentAiSuggestionDraftDocument(
+          editorState,
+          activeDocument?.snapshot.version.contentHash,
+        ),
+      });
+
+      setSuggestionDrafts((currentDrafts) => ({
+        ...currentDrafts,
+        [messageId]: draft,
+      }));
+    },
+    [activeDocument?.snapshot.version.contentHash, editorState, suggestionDraftCandidates],
+  );
+
+  const reviewSuggestionDraft = useCallback(
+    (messageId: string) => {
+      const draft = suggestionDrafts[messageId];
+      if (!draft) {
+        return;
+      }
+
+      onReviewSuggestionDraft?.(draft);
+    },
+    [onReviewSuggestionDraft, suggestionDrafts],
+  );
+
   if (!open) {
     return null;
   }
@@ -377,6 +464,9 @@ export function AiAssistantPanel({
         activeRun={activeRun}
         lastError={lastError}
         revisionNotice={revisionNotice}
+        suggestionDrafts={suggestionDraftThreadState}
+        onSaveSuggestionDraft={saveSuggestionDraft}
+        onReviewSuggestionDraft={onReviewSuggestionDraft ? reviewSuggestionDraft : undefined}
         onRetry={lastPromptRef.current ? retryLastPrompt : undefined}
       />
 

@@ -17,6 +17,7 @@ import type {
   ProposalReview,
   ProposalReviewChange,
   ProposalReviewChangeType,
+  ProposalReviewDraftSource,
   ProposalReviewEditorSnapshot,
   ProposalReviewMessage,
   ProposalReviewMessageCode,
@@ -90,6 +91,34 @@ export function createInvalidProposalReview(
       code: 'proposal_validation_failed',
       message: 'Proposal validation failed.',
     },
+  };
+}
+
+export function createSuggestionDraftReview(
+  draftSource: ProposalReviewDraftSource,
+  editorSnapshot: ProposalReviewEditorSnapshot,
+  options: CreateProposalReviewOptions = {},
+): ProposalReview {
+  const timestamp = toIsoString(options.now);
+
+  return {
+    reviewId: options.reviewId ?? draftSource.proposalId,
+    proposalId: draftSource.proposalId,
+    sourceConversationId: draftSource.sourceConversationId,
+    status: 'draft',
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    draftSource,
+    editorSnapshot,
+    messages: [
+      createStatusMessage(
+        'suggestion_draft_saved',
+        'Suggestion draft saved',
+        'The draft is isolated from the editor and has not changed the mind map or Markdown file.',
+      ),
+      ...draftSource.messages,
+    ],
+    confirmedRiskFlags: [],
   };
 }
 
@@ -413,6 +442,13 @@ export function createProposalReviewStore(
       return replaceActive(
         createInvalidProposalReview(invalidSource, editorSnapshot),
         'receive-invalid-proposal',
+      );
+    },
+
+    receiveSuggestionDraft(draftSource, editorSnapshot) {
+      return replaceActive(
+        createSuggestionDraftReview(draftSource, editorSnapshot),
+        'receive-suggestion-draft',
       );
     },
 

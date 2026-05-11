@@ -249,3 +249,44 @@ export interface AiRunEvent {
   status: AiRunStatus;
   error?: AiError;
 }
+
+export type AiSuggestionDraftWarningCode =
+  | AiContextWarningCode
+  | 'document_revision_mismatch'
+  | 'document_content_hash_mismatch';
+
+export interface AiSuggestionDraftWarning {
+  code: AiSuggestionDraftWarningCode;
+  message: string;
+  itemId?: string;
+  relativePath?: WorkspaceRelativePath;
+  expectedRevision?: string;
+  currentRevision?: string;
+  expectedContentHash?: string;
+  currentContentHash?: string;
+}
+
+export interface AiSuggestionDraftTargetContext {
+  workspaceId: WorkspaceId;
+  scope: AiContextScope;
+  displayLabel: string;
+  documentId?: string;
+  documentPath?: WorkspaceRelativePath;
+  documentRevision?: string;
+  documentContentHash?: string;
+  selectedNodeIds?: NodeId[];
+  itemIds: string[];
+}
+
+export interface AiSuggestionDraft {
+  id: string;
+  sourceSessionId: string;
+  sourceMessageId: string;
+  sourceRunId: string;
+  sourcePrompt: string;
+  targetContext: AiSuggestionDraftTargetContext;
+  rawAssistantContent: string;
+  structuredOperations?: unknown;
+  warnings: AiSuggestionDraftWarning[];
+  createdAt: string;
+}

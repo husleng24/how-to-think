@@ -21,6 +21,9 @@ export type ProposalReviewStatus =
 export type ProposalReviewMessageSeverity = 'info' | 'warning' | 'error';
 
 export type ProposalReviewMessageCode =
+  | 'suggestion_draft_saved'
+  | 'suggestion_draft_warning'
+  | 'suggestion_draft_revision_mismatch'
   | 'proposal_ready'
   | 'proposal_rejected'
   | 'proposal_applying'
@@ -70,6 +73,21 @@ export interface InvalidProposalReviewSource {
   errors: ProposalValidationError[];
 }
 
+export interface ProposalReviewDraftSource {
+  proposalId: ProposalId;
+  sourceConversationId?: string;
+  sourceMessageId?: string;
+  summary?: string;
+  rawAssistantContent: string;
+  targetScopeLabel: string;
+  documentId?: string;
+  documentPath?: WorkspaceRelativePath;
+  baseDocumentRevision?: string;
+  baseDocumentContentHash?: string;
+  messages: ProposalReviewMessage[];
+  createdAt: IsoDateTimeString;
+}
+
 export interface ProposalReview {
   reviewId: string;
   proposalId: ProposalId;
@@ -79,6 +97,7 @@ export interface ProposalReview {
   updatedAt: IsoDateTimeString;
   proposal?: AiChangeProposal;
   invalidSource?: InvalidProposalReviewSource;
+  draftSource?: ProposalReviewDraftSource;
   editorSnapshot: ProposalReviewEditorSnapshot;
   messages: ProposalReviewMessage[];
   confirmedRiskFlags: ProposalRiskFlag[];
@@ -102,6 +121,7 @@ export interface ProposalReviewState {
 export type ProposalReviewChangeType =
   | 'receive-proposal'
   | 'receive-invalid-proposal'
+  | 'receive-suggestion-draft'
   | 'start-validation'
   | 'mark-ready'
   | 'mark-conflict'
@@ -129,6 +149,10 @@ export interface ProposalReviewStore {
   receiveProposal(proposal: AiChangeProposal, editorSnapshot: ProposalReviewEditorSnapshot): ProposalReview;
   receiveInvalidProposal(
     invalidSource: InvalidProposalReviewSource,
+    editorSnapshot: ProposalReviewEditorSnapshot,
+  ): ProposalReview;
+  receiveSuggestionDraft(
+    draftSource: ProposalReviewDraftSource,
     editorSnapshot: ProposalReviewEditorSnapshot,
   ): ProposalReview;
   startValidation(reviewId?: string): ProposalReview | null;

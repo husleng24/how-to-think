@@ -1,12 +1,20 @@
-import { AlertTriangle, Bot, CircleStop, Loader2, User } from 'lucide-react';
+import { AlertTriangle, Bot, CircleStop, FileText, Loader2, User } from 'lucide-react';
 
 import type { AiError, AiMessage, AiRun } from '../types';
+
+export interface ConversationSuggestionDraftState {
+  status: 'candidate' | 'draft';
+  warnings: string[];
+}
 
 interface ConversationThreadProps {
   messages: AiMessage[];
   activeRun: AiRun | null;
   lastError: AiError | null;
   revisionNotice: string | null;
+  suggestionDrafts?: Record<string, ConversationSuggestionDraftState>;
+  onSaveSuggestionDraft?: (messageId: string) => void;
+  onReviewSuggestionDraft?: (messageId: string) => void;
   onRetry?: () => void;
 }
 
@@ -15,6 +23,9 @@ export function ConversationThread({
   activeRun,
   lastError,
   revisionNotice,
+  suggestionDrafts = {},
+  onSaveSuggestionDraft,
+  onReviewSuggestionDraft,
   onRetry,
 }: ConversationThreadProps) {
   const runStatus = activeRun?.status ?? null;
@@ -36,6 +47,14 @@ export function ConversationThread({
                 {message.contextLabel ? <span>{message.contextLabel}</span> : null}
               </div>
               <p>{message.content}</p>
+              {message.role === 'assistant' && suggestionDrafts[message.id] ? (
+                <SuggestionDraftControls
+                  messageId={message.id}
+                  state={suggestionDrafts[message.id]}
+                  onSave={onSaveSuggestionDraft}
+                  onReview={onReviewSuggestionDraft}
+                />
+              ) : null}
             </div>
           </article>
         ))
@@ -75,6 +94,44 @@ export function ConversationThread({
         <p className="ai-assistant-revision-note">{revisionNotice}</p>
       ) : null}
     </section>
+  );
+}
+
+function SuggestionDraftControls({
+  messageId,
+  state,
+  onSave,
+  onReview,
+}: {
+  messageId: string;
+  state: ConversationSuggestionDraftState;
+  onSave?: (messageId: string) => void;
+  onReview?: (messageId: string) => void;
+}) {
+  const isDraft = state.status === 'draft';
+
+  return (
+    <div className={`ai-message-suggestion ${state.status}`}>
+      <div className="ai-message-suggestion-heading">
+        <strong>{isDraft ? 'Suggestion draft' : 'Suggestion available'}</strong>
+        <button
+          className="text-button ai-assistant-compact-action"
+          type="button"
+          onClick={() => (isDraft ? onReview?.(messageId) : onSave?.(messageId))}
+          disabled={isDraft ? !onReview : !onSave}
+        >
+          <FileText size={14} />
+          {isDraft ? 'Review suggestion' : 'Save as suggestion'}
+        </button>
+      </div>
+      {state.warnings.length > 0 ? (
+        <ul className="ai-message-suggestion-warnings">
+          {state.warnings.map((warning, index) => (
+            <li key={`${warning}-${index}`}>{warning}</li>
+          ))}
+        </ul>
+      ) : null}
+    </div>
   );
 }
 
