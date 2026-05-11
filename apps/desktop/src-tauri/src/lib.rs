@@ -1,8 +1,10 @@
 pub mod ai;
 pub mod atomic_write;
 pub mod cli;
+pub mod cli_guard;
 pub mod command_service;
 pub mod commands;
+pub mod desktop_bridge;
 pub mod documents;
 pub mod errors;
 pub mod file_index;
@@ -20,8 +22,29 @@ pub(crate) mod workspace_test_fixtures;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    use tauri::Manager;
+
+    let desktop_bridge_state = desktop_bridge::DesktopBridgeState::default();
+    let startup_desktop_bridge_state = desktop_bridge_state.clone();
+
     tauri::Builder::default()
+        .setup(move |app| {
+            match app.path().app_data_dir() {
+                Ok(app_data_dir) => {
+                    if let Err(error) =
+                        startup_desktop_bridge_state.start(app_data_dir, env!("CARGO_PKG_VERSION"))
+                    {
+                        eprintln!("Desktop bridge unavailable: {}", error.message);
+                    }
+                }
+                Err(error) => {
+                    eprintln!("Desktop bridge app data directory unavailable: {error}");
+                }
+            }
+            Ok(())
+        })
         .manage(fs_watch::WorkspaceWatchState::default())
+        .manage(desktop_bridge_state)
         .manage(ai::runner::AiRuntimeState::default())
         .invoke_handler(tauri::generate_handler![
             commands::load_remembered_workspace,
@@ -43,6 +66,9 @@ pub fn run() {
             commands::save_markdown_mind_map,
             commands::remember_last_opened_file,
             commands::validate_workspace_relative_path,
+            commands::publish_desktop_session_status,
+            commands::get_desktop_session_status,
+            commands::drain_desktop_ui_actions,
             commands::create_markdown_document,
             commands::preview_ai_context_snapshot,
             commands::open_markdown_document,

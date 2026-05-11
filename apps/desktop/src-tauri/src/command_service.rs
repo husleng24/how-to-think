@@ -1,4 +1,10 @@
 use crate::ai::providers::{AiProviderSettings, AiProviderStore, AI_PROVIDER_SETTINGS_FILE};
+use crate::cli_guard::{
+    evaluate_cli_preflight, CliGuardBlockCode, CliPreflightDecision, CliPreflightRequest,
+};
+use crate::desktop_bridge::{
+    CliUiAction, CliUiActionKind, DesktopBridgeAdapter, DesktopBridgeClient, DesktopBridgeProbe,
+};
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::models::Platform;
 use crate::path_guard;
@@ -127,6 +133,7 @@ pub struct DoctorReport {
     pub app_config_dir: String,
     pub non_interactive: bool,
     pub settings: DoctorSettingsSummary,
+    pub desktop: DoctorDesktopSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workspace: Option<DoctorWorkspaceSummary>,
     pub checks: Vec<DoctorCheck>,
@@ -138,6 +145,16 @@ pub struct DoctorSettingsSummary {
     pub recent_workspace_count: usize,
     pub active_provider_id: Option<String>,
     pub provider_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DoctorDesktopSummary {
+    pub running: bool,
+    pub bridge_available: bool,
+    pub dirty_document_count: usize,
+    pub pending_ai_proposal_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub active_workspace_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -164,6 +181,15 @@ pub enum DoctorCheckStatus {
     Ok,
     Warning,
     Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UiActionRequest {
+    pub command_id: String,
+    pub kind: CliUiActionKind,
+    pub target: String,
+    pub reason: String,
+    pub non_interactive: bool,
 }
 
 impl CommandServicePaths {
@@ -209,6 +235,19 @@ impl CommandService {
                     name: "doctor",
                     description: "Check command service, settings, and optional workspace access.",
                 },
+                HelpCommand {
+                    name: "ui.open",
+                    description:
+                        "Return a desktop UI handoff for an app, workspace, or file target.",
+                },
+                HelpCommand {
+                    name: "ui.focus",
+                    description: "Return a desktop UI handoff for a file, node, or link target.",
+                },
+                HelpCommand {
+                    name: "ui.review",
+                    description: "Return a desktop review handoff for AI, Git, or conflict review.",
+                },
             ],
             global_flags: vec![
                 HelpFlag {
@@ -226,6 +265,18 @@ impl CommandService {
                 HelpFlag {
                     name: "--non-interactive",
                     description: "Return deterministic non-prompting results.",
+                },
+                HelpFlag {
+                    name: "--target <target>",
+                    description: "Provide a desktop UI handoff target.",
+                },
+                HelpFlag {
+                    name: "--reason <text>",
+                    description: "Explain why a desktop UI handoff is required.",
+                },
+                HelpFlag {
+                    name: "--confirm-token <token>",
+                    description: "Provide a typed confirmation token returned by preflight.",
                 },
             ],
             contract_version: CLI_CONTRACT_VERSION,
@@ -289,6 +340,52 @@ impl CommandService {
             )),
         }
 
+        let desktop = match DesktopBridgeClient::new(&self.paths.app_data_dir).session_status() {
+            DesktopBridgeProbe::NotRunning => {
+                checks.push(DoctorCheck::ok(
+                    "desktop_bridge",
+                    "No running desktop bridge was detected.",
+                ));
+                DoctorDesktopSummary {
+                    running: false,
+                    bridge_available: false,
+                    dirty_document_count: 0,
+                    pending_ai_proposal_count: 0,
+                    active_workspace_id: None,
+                }
+            }
+            DesktopBridgeProbe::Running(status) => {
+                checks.push(DoctorCheck::ok(
+                    "desktop_bridge",
+                    "Desktop bridge is reachable.",
+                ));
+                DoctorDesktopSummary {
+                    running: status.running,
+                    bridge_available: status.bridge_available,
+                    dirty_document_count: status.dirty_documents.len(),
+                    pending_ai_proposal_count: status.pending_ai_proposals.len(),
+                    active_workspace_id: status
+                        .active_workspace
+                        .as_ref()
+                        .map(|workspace| workspace.workspace_id.clone()),
+                }
+            }
+            DesktopBridgeProbe::Unavailable(error) => {
+                checks.push(DoctorCheck::error(
+                    "desktop_bridge",
+                    error.message,
+                    details([("code", json!(format!("{:?}", error.code)))]),
+                ));
+                DoctorDesktopSummary {
+                    running: true,
+                    bridge_available: false,
+                    dirty_document_count: 0,
+                    pending_ai_proposal_count: 0,
+                    active_workspace_id: None,
+                }
+            }
+        };
+
         let workspace = request.workspace_path.as_ref().and_then(|workspace_path| {
             match workspace::load_workspace_session(
                 workspace_path,
@@ -322,6 +419,7 @@ impl CommandService {
             app_config_dir: self.paths.app_config_dir.display().to_string(),
             non_interactive: request.non_interactive,
             settings,
+            desktop,
             workspace,
             checks,
         }
@@ -332,6 +430,46 @@ impl CommandService {
         relative_path: &str,
     ) -> Result<String, WorkspaceError> {
         validate_workspace_relative_path(relative_path)
+    }
+
+    pub fn preflight(&self, request: CliPreflightRequest) -> CliResultEnvelope {
+        let bridge = DesktopBridgeClient::new(&self.paths.app_data_dir);
+        self.preflight_with_bridge(request, &bridge)
+    }
+
+    pub fn preflight_with_bridge<B: DesktopBridgeAdapter>(
+        &self,
+        request: CliPreflightRequest,
+        bridge: &B,
+    ) -> CliResultEnvelope {
+        let operation_id = request.command_id.clone();
+        let decision = evaluate_cli_preflight(request, bridge);
+        CliResultEnvelope::from_preflight_decision(operation_id, decision)
+    }
+
+    pub fn request_desktop_ui(&self, request: UiActionRequest) -> CliResultEnvelope {
+        let bridge = DesktopBridgeClient::new(&self.paths.app_data_dir);
+        self.request_desktop_ui_with_bridge(request, &bridge)
+    }
+
+    pub fn request_desktop_ui_with_bridge<B: DesktopBridgeAdapter>(
+        &self,
+        request: UiActionRequest,
+        bridge: &B,
+    ) -> CliResultEnvelope {
+        let action = CliUiAction::new(request.kind, request.target, request.reason);
+        let delivered_action = match bridge.session_status() {
+            DesktopBridgeProbe::Running(status) if status.can_handle_ui_action => {
+                bridge.request_ui_action(action.clone()).unwrap_or(action)
+            }
+            _ => action,
+        };
+
+        CliResultEnvelope::ui_required(
+            request.command_id,
+            delivered_action,
+            "The operation must continue in the desktop UI.",
+        )
     }
 }
 
@@ -370,6 +508,56 @@ impl CliResultEnvelope {
             }),
             needs_confirmation: None,
             ui_action: None,
+        }
+    }
+
+    pub fn confirmation_required(
+        operation_id: impl Into<String>,
+        confirmation: impl Serialize,
+    ) -> Self {
+        let mut envelope = Self::error(
+            operation_id,
+            CliErrorCode::ConfirmationRequired,
+            "The operation requires explicit confirmation before it can continue.",
+        );
+        envelope.needs_confirmation =
+            Some(serde_json::to_value(confirmation).unwrap_or(Value::Null));
+        envelope
+    }
+
+    pub fn ui_required(
+        operation_id: impl Into<String>,
+        action: impl Serialize,
+        message: impl Into<String>,
+    ) -> Self {
+        let mut envelope = Self::error(operation_id, CliErrorCode::UiRequired, message);
+        envelope.ui_action = Some(serde_json::to_value(action).unwrap_or(Value::Null));
+        envelope
+    }
+
+    pub fn from_preflight_decision(
+        operation_id: impl Into<String>,
+        decision: CliPreflightDecision,
+    ) -> Self {
+        let operation_id = operation_id.into();
+        match decision {
+            CliPreflightDecision::Proceed { approval } => Self::success(operation_id, approval),
+            CliPreflightDecision::NeedsConfirmation { confirmation } => {
+                Self::confirmation_required(operation_id, confirmation)
+            }
+            CliPreflightDecision::UiRequired { action } => Self::ui_required(
+                operation_id,
+                action,
+                "The operation must continue in the desktop UI.",
+            ),
+            CliPreflightDecision::Blocked { block } => {
+                let code = cli_error_code_for_guard_block(block.code);
+                let mut envelope = Self::error(operation_id, code, block.message);
+                if let Some(error) = &mut envelope.error {
+                    error.details = block.details;
+                }
+                envelope
+            }
         }
     }
 
@@ -498,6 +686,16 @@ pub fn cli_error_code_for_workspace_error(code: WorkspaceErrorCode) -> CliErrorC
     }
 }
 
+pub fn cli_error_code_for_guard_block(code: CliGuardBlockCode) -> CliErrorCode {
+    match code {
+        CliGuardBlockCode::ValidationError => CliErrorCode::ValidationError,
+        CliGuardBlockCode::VersionConflict => CliErrorCode::VersionConflict,
+        CliGuardBlockCode::ExternalStateChanged => CliErrorCode::ExternalStateChanged,
+        CliGuardBlockCode::BackendUnavailable => CliErrorCode::BackendUnavailable,
+        CliGuardBlockCode::InternalError => CliErrorCode::InternalError,
+    }
+}
+
 pub fn exit_code_for_error_code(code: CliErrorCode) -> i32 {
     match code {
         CliErrorCode::ValidationError
@@ -621,7 +819,31 @@ fn _assert_settings_types_are_shared(_: WorkspaceSettings, _: AiProviderSettings
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli_guard::{CliGuardedOperation, CliNonInteractivePromptBehavior};
     use crate::commands;
+    use crate::desktop_bridge::{DesktopBridgeError, DesktopBridgeProbe, DesktopSessionStatus};
+
+    #[derive(Debug, Clone)]
+    struct FakeDesktopBridge {
+        probe: DesktopBridgeProbe,
+    }
+
+    impl DesktopBridgeAdapter for FakeDesktopBridge {
+        fn session_status(&self) -> DesktopBridgeProbe {
+            self.probe.clone()
+        }
+
+        fn request_ui_action(
+            &self,
+            action: CliUiAction,
+        ) -> Result<CliUiAction, DesktopBridgeError> {
+            Ok(action)
+        }
+    }
+
+    fn fake_bridge(probe: DesktopBridgeProbe) -> FakeDesktopBridge {
+        FakeDesktopBridge { probe }
+    }
 
     #[test]
     fn success_envelope_matches_contract_fields() {
@@ -697,6 +919,7 @@ mod tests {
             .checks
             .iter()
             .any(|check| check.id == "provider_settings" && check.status == DoctorCheckStatus::Ok));
+        assert!(!report.desktop.running);
     }
 
     #[test]
@@ -713,5 +936,74 @@ mod tests {
                 .validate_workspace_relative_path("notes/idea.md")
                 .unwrap()
         );
+    }
+
+    #[test]
+    fn preflight_confirmation_maps_to_result_envelope() {
+        let paths = CommandServicePaths {
+            app_data_dir: PathBuf::from("unused-data"),
+            app_config_dir: PathBuf::from("unused-config"),
+        };
+        let service = CommandService::new(paths);
+        let envelope = service.preflight_with_bridge(
+            CliPreflightRequest {
+                command_id: "workspace.file.delete".to_owned(),
+                operation: CliGuardedOperation::DestructiveFile,
+                workspace_path: None,
+                workspace_id: Some("workspace-1".to_owned()),
+                relative_paths: vec!["notes.md".to_owned()],
+                expected_versions: Vec::new(),
+                confirmation_token: None,
+                non_interactive: true,
+                risks: Vec::new(),
+                ui_action: None,
+            },
+            &fake_bridge(DesktopBridgeProbe::NotRunning),
+        );
+
+        assert!(!envelope.ok);
+        assert_eq!(
+            envelope.error.as_ref().unwrap().code,
+            CliErrorCode::ConfirmationRequired
+        );
+        let confirmation = envelope.needs_confirmation.unwrap();
+        assert_eq!(confirmation["kind"], "destructive_file");
+        assert_eq!(
+            confirmation["non_interactive"],
+            serde_json::to_value(CliNonInteractivePromptBehavior::ReturnConfirmationRequired)
+                .unwrap()
+        );
+    }
+
+    #[test]
+    fn ui_handoff_maps_to_result_envelope() {
+        let paths = CommandServicePaths {
+            app_data_dir: PathBuf::from("unused-data"),
+            app_config_dir: PathBuf::from("unused-config"),
+        };
+        let service = CommandService::new(paths);
+        let envelope = service.request_desktop_ui_with_bridge(
+            UiActionRequest {
+                command_id: "ui.review".to_owned(),
+                kind: CliUiActionKind::OpenReviewSurface,
+                target: "workspace:workspace-1/file:notes.md".to_owned(),
+                reason: "Review pending changes.".to_owned(),
+                non_interactive: true,
+            },
+            &fake_bridge(DesktopBridgeProbe::Running(DesktopSessionStatus {
+                running: true,
+                bridge_available: true,
+                can_handle_ui_action: true,
+                ..DesktopSessionStatus::not_running()
+            })),
+        );
+
+        assert!(!envelope.ok);
+        assert_eq!(envelope.exit_code(), 50);
+        assert_eq!(
+            envelope.error.as_ref().unwrap().code,
+            CliErrorCode::UiRequired
+        );
+        assert_eq!(envelope.ui_action.unwrap()["kind"], "open_review_surface");
     }
 }

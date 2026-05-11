@@ -1,5 +1,8 @@
 use crate::ai::context::{build_context_snapshot, AiContextSnapshot, AiContextSnapshotRequest};
 use crate::command_service;
+use crate::desktop_bridge::{
+    CliUiAction, DesktopBridgeState, DesktopSessionStatus, DesktopSessionStatusUpdate,
+};
 use crate::documents;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::fs_watch::{self, WorkspaceWatchState};
@@ -20,6 +23,7 @@ use crate::workspace::{
     create_workspace, validate_workspace_root, workspace_session,
     workspace_session_with_last_opened_file,
 };
+use tauri::State;
 use tauri::{AppHandle, Manager};
 
 #[tauri::command]
@@ -307,6 +311,24 @@ pub fn remember_last_opened_file(
 #[tauri::command]
 pub fn validate_workspace_relative_path(relative_path: String) -> Result<String, WorkspaceError> {
     command_service::validate_workspace_relative_path(&relative_path)
+}
+
+#[tauri::command]
+pub fn publish_desktop_session_status(
+    state: State<'_, DesktopBridgeState>,
+    status: DesktopSessionStatusUpdate,
+) -> Result<DesktopSessionStatus, String> {
+    state.update_status(status).map_err(|error| error.message)
+}
+
+#[tauri::command]
+pub fn get_desktop_session_status(state: State<'_, DesktopBridgeState>) -> DesktopSessionStatus {
+    state.status()
+}
+
+#[tauri::command]
+pub fn drain_desktop_ui_actions(state: State<'_, DesktopBridgeState>) -> Vec<CliUiAction> {
+    state.drain_pending_ui_actions()
 }
 
 #[tauri::command]

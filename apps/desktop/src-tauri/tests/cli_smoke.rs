@@ -95,3 +95,35 @@ fn invalid_json_command_returns_contract_exit_code() {
     assert_eq!(envelope["ok"], false);
     assert_eq!(envelope["error"]["code"], "command_unavailable");
 }
+
+#[test]
+fn ui_review_json_returns_structured_handoff_without_prompting() {
+    let temp = tempfile::tempdir().unwrap();
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+
+    let output = cli_output(&[
+        "--json",
+        "--non-interactive",
+        "ui.review",
+        "--target",
+        "workspace:workspace-1/file:notes.md",
+        "--reason",
+        "Review dirty editor state.",
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(output.status.code(), Some(50));
+    let envelope: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(envelope["ok"], false);
+    assert_eq!(envelope["operation_id"], "ui.review");
+    assert_eq!(envelope["error"]["code"], "ui_required");
+    assert_eq!(envelope["ui_action"]["kind"], "open_review_surface");
+    assert_eq!(
+        envelope["ui_action"]["target"],
+        "workspace:workspace-1/file:notes.md"
+    );
+}

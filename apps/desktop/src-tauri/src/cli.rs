@@ -1,7 +1,8 @@
 use crate::command_service::{
     CliErrorCode, CliResultEnvelope, CommandService, CommandServicePaths, DoctorCheckStatus,
-    DoctorReport, DoctorRequest, HelpData, VersionData,
+    DoctorReport, DoctorRequest, HelpData, UiActionRequest, VersionData,
 };
+use crate::desktop_bridge::CliUiActionKind;
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,6 +19,9 @@ pub struct CliOptions {
     pub app_data_dir: Option<PathBuf>,
     pub app_config_dir: Option<PathBuf>,
     pub non_interactive: bool,
+    pub target: Option<String>,
+    pub reason: Option<String>,
+    pub confirmation_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -25,6 +29,9 @@ pub enum CliCommand {
     Help,
     Version,
     Doctor,
+    UiOpen,
+    UiFocus,
+    UiReview,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,6 +84,9 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
     let mut app_data_dir = None;
     let mut app_config_dir = None;
     let mut non_interactive = false;
+    let mut target = None;
+    let mut reason = None;
+    let mut confirmation_token = None;
     let mut command = None;
     let mut index = 0;
 
@@ -110,6 +120,21 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
                 non_interactive = true;
                 index += 1;
             }
+            "--target" => {
+                let value = required_value(args, index)?;
+                target = Some(value.to_owned());
+                index += 2;
+            }
+            "--reason" => {
+                let value = required_value(args, index)?;
+                reason = Some(value.to_owned());
+                index += 2;
+            }
+            "--confirm-token" => {
+                let value = required_value(args, index)?;
+                confirmation_token = Some(value.to_owned());
+                index += 2;
+            }
             "--help" | "-h" => {
                 command = set_command(command, CliCommand::Help)?;
                 index += 1;
@@ -138,6 +163,9 @@ pub fn parse_args(args: &[String]) -> Result<CliOptions, CliParseError> {
         app_data_dir,
         app_config_dir,
         non_interactive,
+        target,
+        reason,
+        confirmation_token,
     })
 }
 
@@ -172,6 +200,27 @@ fn execute_options(options: CliOptions) -> CliExecution {
                 render_error(envelope, options.output_mode)
             }
         },
+        CliCommand::UiOpen | CliCommand::UiFocus | CliCommand::UiReview => {
+            match CommandServicePaths::resolve(
+                options.app_data_dir.clone(),
+                options.app_config_dir.clone(),
+            ) {
+                Ok(paths) => {
+                    let service = CommandService::new(paths);
+                    let request = ui_action_request(&options);
+                    let envelope = service.request_desktop_ui(request);
+                    render_error(envelope, options.output_mode)
+                }
+                Err(error) => {
+                    let envelope = CliResultEnvelope::error(
+                        ui_operation_id(options.command),
+                        error.code,
+                        error.message,
+                    );
+                    render_error(envelope, options.output_mode)
+                }
+            }
+        }
     }
 }
 
@@ -201,18 +250,93 @@ fn render_error(envelope: CliResultEnvelope, output_mode: OutputMode) -> CliExec
             exit_code,
         },
         OutputMode::Human => {
-            let message = envelope
-                .error
-                .as_ref()
-                .map(|error| error.message.as_str())
-                .unwrap_or("Command failed.");
+            let message = render_human_error_message(&envelope);
 
             CliExecution {
                 stdout: String::new(),
-                stderr: format!("Error: {message}\nRun `how-to-think help` for usage."),
+                stderr: format!("{message}\nRun `how-to-think help` for usage."),
                 exit_code,
             }
         }
+    }
+}
+
+fn render_human_error_message(envelope: &CliResultEnvelope) -> String {
+    if let Some(confirmation) = &envelope.needs_confirmation {
+        let prompt = confirmation
+            .get("prompt")
+            .and_then(|value| value.as_str())
+            .unwrap_or("This operation requires confirmation.");
+        let token = confirmation
+            .get("confirm_token")
+            .and_then(|value| value.as_str())
+            .unwrap_or("<unavailable>");
+        return format!("Confirmation required: {prompt}\nConfirmation token: {token}");
+    }
+
+    if let Some(action) = &envelope.ui_action {
+        let reason = action
+            .get("reason")
+            .and_then(|value| value.as_str())
+            .unwrap_or("The operation must continue in the desktop UI.");
+        let target = action
+            .get("target")
+            .and_then(|value| value.as_str())
+            .unwrap_or("app");
+        return format!("Desktop UI required: {reason}\nTarget: {target}");
+    }
+
+    let message = envelope
+        .error
+        .as_ref()
+        .map(|error| error.message.as_str())
+        .unwrap_or("Command failed.");
+    format!("Error: {message}")
+}
+
+fn ui_action_request(options: &CliOptions) -> UiActionRequest {
+    let command_id = ui_operation_id(options.command).to_owned();
+    let kind = match options.command {
+        CliCommand::UiOpen => CliUiActionKind::OpenWindow,
+        CliCommand::UiFocus => CliUiActionKind::FocusExistingWindow,
+        CliCommand::UiReview => CliUiActionKind::OpenReviewSurface,
+        _ => CliUiActionKind::OpenWindow,
+    };
+    let target = options
+        .target
+        .clone()
+        .or_else(|| {
+            options
+                .workspace_path
+                .as_ref()
+                .map(|path| format!("workspace:{}", path.display()))
+        })
+        .unwrap_or_else(|| "app".to_owned());
+    let reason = options
+        .reason
+        .clone()
+        .unwrap_or_else(|| match options.command {
+            CliCommand::UiOpen => "Open the desktop app for this target.".to_owned(),
+            CliCommand::UiFocus => "Focus this target in the desktop app.".to_owned(),
+            CliCommand::UiReview => "Review this target in the desktop app.".to_owned(),
+            _ => "Open the desktop app.".to_owned(),
+        });
+
+    UiActionRequest {
+        command_id,
+        kind,
+        target,
+        reason,
+        non_interactive: options.non_interactive,
+    }
+}
+
+fn ui_operation_id(command: CliCommand) -> &'static str {
+    match command {
+        CliCommand::UiOpen => "ui.open",
+        CliCommand::UiFocus => "ui.focus",
+        CliCommand::UiReview => "ui.review",
+        _ => "ui.open",
     }
 }
 
@@ -245,6 +369,19 @@ fn render_doctor(data: &DoctorReport) -> String {
     output.push_str(&format!("How to Think CLI doctor {}\n", data.app_version));
     output.push_str(&format!("App data: {}\n", data.app_data_dir));
     output.push_str(&format!("App config: {}\n", data.app_config_dir));
+    output.push_str(&format!(
+        "Desktop bridge: {}{}\n",
+        if data.desktop.running {
+            "running"
+        } else {
+            "not running"
+        },
+        if data.desktop.bridge_available {
+            " (reachable)"
+        } else {
+            ""
+        }
+    ));
 
     if let Some(workspace) = &data.workspace {
         output.push_str(&format!(
@@ -278,6 +415,9 @@ fn parse_command(value: &str) -> Result<CliCommand, CliParseError> {
         "help" => Ok(CliCommand::Help),
         "version" => Ok(CliCommand::Version),
         "doctor" | "diagnostics.doctor" => Ok(CliCommand::Doctor),
+        "ui.open" => Ok(CliCommand::UiOpen),
+        "ui.focus" => Ok(CliCommand::UiFocus),
+        "ui.review" => Ok(CliCommand::UiReview),
         _ => Err(CliParseError {
             code: CliErrorCode::CommandUnavailable,
             message: format!("Unknown command `{value}`."),
@@ -374,6 +514,28 @@ mod tests {
 
         assert_eq!(options.command, CliCommand::Version);
         assert_eq!(options.output_mode, OutputMode::Json);
+    }
+
+    #[test]
+    fn parses_ui_handoff_target_and_reason() {
+        let options = parse_args(&args(&[
+            "ui.review",
+            "--target",
+            "workspace:one/file:notes.md",
+            "--reason",
+            "Review dirty state.",
+            "--confirm-token",
+            "confirm:test",
+        ]))
+        .unwrap();
+
+        assert_eq!(options.command, CliCommand::UiReview);
+        assert_eq!(
+            options.target.as_deref(),
+            Some("workspace:one/file:notes.md")
+        );
+        assert_eq!(options.reason.as_deref(), Some("Review dirty state."));
+        assert_eq!(options.confirmation_token.as_deref(), Some("confirm:test"));
     }
 
     #[test]
