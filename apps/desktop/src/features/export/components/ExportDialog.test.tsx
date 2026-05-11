@@ -140,6 +140,45 @@ describe('ExportDialog', () => {
     expect(runExport).toHaveBeenCalledTimes(2);
   });
 
+  it('keeps unsaved editor state out of source-Markdown export mode', async () => {
+    const editorState = {
+      ...createMindMapEditorState({
+        document: editorDocument(),
+        selection: {
+          selectedNodeId: 'roadmap',
+        },
+      }),
+      isDirty: true,
+      savedContentRevision: 1,
+      contentRevision: 2,
+    };
+    const before = structuredClone(editorState.document);
+
+    render(
+      <ExportDialog
+        open
+        editorState={editorState}
+        runExport={runExport}
+        onClose={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByLabelText('Markdown'));
+    expect(screen.getByRole('option', { name: 'Source Markdown' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Export' }));
+
+    await waitFor(() => expect(runExport).toHaveBeenCalled());
+    const payload = runExport.mock.calls[0][0] as {
+      request: ExportRequest;
+      markdownArtifact?: { markdown: string; writesSourceFile: false };
+    };
+    expect(payload.request.options.markdown?.mode).toBe('markmap_hierarchy');
+    expect(payload.markdownArtifact?.writesSourceFile).toBe(false);
+    expect(editorState.document).toEqual(before);
+    expect(editorState.isDirty).toBe(true);
+  });
+
   it('shows validation and output errors without closing the dialog', async () => {
     runExport.mockImplementation(async ({ request }) => {
       return {

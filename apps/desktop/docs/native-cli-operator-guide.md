@@ -122,6 +122,18 @@ how-to-think --json markdown.check --workspace ./notes --path plan.md
 how-to-think --json markdown.links.resolve --workspace ./notes --path plan.md
 ```
 
+Render export artifacts:
+
+```bash
+how-to-think --json render ./plan.md --format svg --output plan.svg --workspace ./notes
+how-to-think --json render ./plan.md --format png --output plan.png --workspace ./notes
+how-to-think --json render ./plan.md --format pdf --output plan.pdf --workspace ./notes
+how-to-think --json render ./plan.md --format markdown --output plan.export.md --workspace ./notes
+how-to-think --json render ./plan.md --format markdown --scope branch --node-path "Plan/Next" --output next.md --workspace ./notes
+```
+
+For export limitations, overwrite confirmation behavior, source-safety expectations, and manual artifact checks, follow `apps/desktop/docs/export-operator-guide.md`.
+
 Use the mock-provider flow in tests by writing `ai-providers.json` into an isolated `--app-config-dir`, then run:
 
 ```bash

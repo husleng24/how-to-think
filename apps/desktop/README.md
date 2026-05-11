@@ -84,4 +84,6 @@ For deterministic AI proposal review/apply regression coverage and manual safety
 
 For native CLI command coverage, JSON envelope behavior, confirmation/UI handoff rules, platform binary locations, and operator examples, follow `apps/desktop/docs/native-cli-operator-guide.md`. The machine-readable native CLI coverage list is `apps/desktop/docs/native-cli-capability-matrix.json`.
 
+For desktop and CLI export usage, PNG/SVG/PDF/Markdown limitations, branch-scope behavior, PDF scaling caveats, failure recovery, and artifact viewer checks, follow `apps/desktop/docs/export-operator-guide.md`.
+
 The scaffold is intentionally isolated under `apps/desktop/` so future `packages/*` and `crates/*` work can be added without coupling to the initial shell.

@@ -123,6 +123,52 @@ fn node_executable() -> String {
     panic!("Node.js is required to run the mock AI provider fixture");
 }
 
+fn representative_export_markdown() -> String {
+    let long_label = "Long label ".repeat(16);
+    let mut deep_lines = Vec::new();
+    for index in 1..=10 {
+        deep_lines.push(format!("{}- Deep level {index}", "  ".repeat(index)));
+    }
+    let mut wide_lines = Vec::new();
+    for index in 1..=16 {
+        wide_lines.push(format!("  - Wide branch {index}"));
+    }
+
+    format!(
+        concat!(
+            "# Export Regression Map\n\n",
+            "Intro paragraph retained only in source Markdown.\n\n",
+            "## Heading hierarchy\n\n",
+            "### Heading child\n\n",
+            "#### Heading grandchild\n\n",
+            "- List hierarchy\n",
+            "  - [ ] Validate [research](./research.md)\n",
+            "  - Review [[Spec|spec]]\n",
+            "  - Keep `code` and *emphasis* readable\n\n",
+            "## Mixed hierarchy branch\n",
+            "- List child under heading\n",
+            "- Second list child\n\n",
+            "```ts\n",
+            "const exportFixture = true;\n",
+            "```\n\n",
+            "- {}\n",
+            "- Deep map\n",
+            "{}\n",
+            "- Wide map\n",
+            "{}\n\n",
+            "| Format | Status |\n",
+            "| --- | --- |\n",
+            "| PNG | supported |\n\n",
+            "- Folded branch\n",
+            "  - Hidden folded child\n",
+            "    - Hidden folded grandchild\n"
+        ),
+        long_label.trim(),
+        deep_lines.join("\n"),
+        wide_lines.join("\n")
+    )
+}
+
 #[test]
 fn help_human_output_succeeds() {
     let output = cli_output(&["help"]);
@@ -992,6 +1038,140 @@ fn render_cli_exports_all_formats_with_json_envelopes() {
 }
 
 #[test]
+fn render_cli_preserves_representative_source_for_successful_and_failed_exports() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    let original = representative_export_markdown();
+    fs::write(workspace.join("plan.md"), &original).unwrap();
+
+    for (format, output_path, prefix) in [
+        ("svg", "exports/plan.svg", b"<?xml".as_slice()),
+        ("png", "exports/plan.png", b"\x89PNG\r\n\x1a\n".as_slice()),
+        ("pdf", "exports/plan.pdf", b"%PDF-".as_slice()),
+        (
+            "markdown",
+            "exports/plan.export.md",
+            b"# Export Regression Map".as_slice(),
+        ),
+    ] {
+        fs::create_dir_all(workspace.join("exports")).unwrap();
+        let (_, rendered) = json_output(&[
+            "--json",
+            "render",
+            "plan.md",
+            "--format",
+            format,
+            "--output",
+            output_path,
+            "--workspace",
+            workspace.to_str().unwrap(),
+            "--app-data-dir",
+            data_dir.to_str().unwrap(),
+            "--app-config-dir",
+            config_dir.to_str().unwrap(),
+            "--non-interactive",
+        ]);
+
+        assert_eq!(rendered["ok"], true, "{format}: {rendered:#}");
+        assert_file_prefix(&workspace.join(output_path), prefix);
+        assert_eq!(
+            fs::read_to_string(workspace.join("plan.md")).unwrap(),
+            original
+        );
+
+        let warnings = rendered["data"]["warnings"].as_array().unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning["code"] == "unmapped_markdown_block"),
+            "{format} should report unmapped Markdown blocks: {rendered:#}"
+        );
+        assert!(
+            warnings
+                .iter()
+                .any(|warning| warning["code"] == "markdown_compatibility_warning"),
+            "{format} should report parser diagnostics: {rendered:#}"
+        );
+    }
+
+    let (format_output, format_error) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "webp",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(format_output.status.code(), Some(10));
+    assert_eq!(format_error["error"]["code"], "invalid_output_format");
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        original
+    );
+
+    let (path_output, path_error) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "svg",
+        "--output",
+        "../outside.svg",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(path_output.status.code(), Some(10));
+    assert_eq!(
+        path_error["error"]["details"]["exportCode"],
+        "invalid_output_path"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        original
+    );
+
+    fs::write(workspace.join("exports/existing.svg"), "existing").unwrap();
+    let (overwrite_output, overwrite_error) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "render",
+        "plan.md",
+        "--format",
+        "svg",
+        "--output",
+        "exports/existing.svg",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+    assert_eq!(overwrite_output.status.code(), Some(30));
+    assert_eq!(overwrite_error["error"]["code"], "confirmation_required");
+    assert_eq!(
+        fs::read_to_string(workspace.join("exports/existing.svg")).unwrap(),
+        "existing"
+    );
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        original
+    );
+}
+
+#[test]
 fn render_cli_exports_branch_markdown_by_node_path() {
     let temp = tempfile::tempdir().unwrap();
     let workspace = temp.path().join("workspace");
@@ -1029,6 +1209,82 @@ fn render_cli_exports_branch_markdown_by_node_path() {
     assert_eq!(rendered["data"]["scope"]["renderedNodeCount"], 2);
     assert_eq!(
         fs::read_to_string(workspace.join("alpha.md")).unwrap(),
+        "- Alpha\n  - Detail\n"
+    );
+}
+
+#[test]
+fn render_cli_allows_same_path_markdown_overwrite_only_after_confirmation() {
+    let temp = tempfile::tempdir().unwrap();
+    let workspace = temp.path().join("workspace");
+    let data_dir = temp.path().join("data");
+    let config_dir = temp.path().join("config");
+    fs::create_dir_all(&workspace).unwrap();
+    let original = "# Plan\n\n## Alpha\n\n### Detail\n\n## Beta\n";
+    fs::write(workspace.join("plan.md"), original).unwrap();
+
+    let (probe_output, probe) = json_output(&[
+        "--json",
+        "--non-interactive",
+        "render",
+        "plan.md",
+        "--format",
+        "markdown",
+        "--scope",
+        "branch",
+        "--node-path",
+        "Plan/Alpha",
+        "--output",
+        "plan.md",
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(probe_output.status.code(), Some(30));
+    assert_eq!(probe["error"]["code"], "confirmation_required");
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
+        original
+    );
+    let token = probe["needs_confirmation"]["confirm_token"]
+        .as_str()
+        .unwrap();
+
+    let (_, confirmed) = json_output(&[
+        "--json",
+        "render",
+        "plan.md",
+        "--format",
+        "markdown",
+        "--scope",
+        "branch",
+        "--node-path",
+        "Plan/Alpha",
+        "--output",
+        "plan.md",
+        "--confirm-token",
+        token,
+        "--workspace",
+        workspace.to_str().unwrap(),
+        "--app-data-dir",
+        data_dir.to_str().unwrap(),
+        "--app-config-dir",
+        config_dir.to_str().unwrap(),
+    ]);
+
+    assert_eq!(confirmed["ok"], true, "{confirmed:#}");
+    assert_eq!(confirmed["data"]["outputPath"], "plan.md");
+    assert!(confirmed["data"]["warnings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|warning| warning["code"] == "output_overwrite_requested"));
+    assert_eq!(
+        fs::read_to_string(workspace.join("plan.md")).unwrap(),
         "- Alpha\n  - Detail\n"
     );
 }
