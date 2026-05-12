@@ -255,7 +255,7 @@ describe('AiAssistantPanel', () => {
     expect(state.history).toBe(historyRef);
     expect(state.isDirty).toBe(false);
     expect(workspaceState.saveStatus.kind).toBe('saved');
-    expect(screen.queryByRole('button', { name: /save as suggestion/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create preview/i })).not.toBeInTheDocument();
   });
 
   it('saves suggestion draft candidates without mutating editor state', async () => {
@@ -276,16 +276,16 @@ describe('AiAssistantPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
-    expect(await screen.findByText('Suggestion available')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
+    expect(await screen.findByText('Preview-only suggestion')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /create preview/i }));
 
-    expect(await screen.findByText('Suggestion draft')).toBeVisible();
+    expect(await screen.findByText('Suggestion preview')).toBeVisible();
     expect(state.document).toBe(documentRef);
     expect(state.history).toBe(historyRef);
     expect(state.isDirty).toBe(false);
     expect(workspaceState.saveStatus.kind).toBe('saved');
 
-    fireEvent.click(screen.getByRole('button', { name: /review suggestion/i }));
+    fireEvent.click(screen.getByRole('button', { name: /review preview/i }));
 
     expect(onReviewSuggestionDraft).toHaveBeenCalledTimes(1);
     const draft = onReviewSuggestionDraft.mock.calls[0][0] as AiSuggestionDraft;
@@ -308,7 +308,7 @@ describe('AiAssistantPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
     expect(await screen.findByText('Assistant response')).toBeVisible();
-    expect(screen.queryByRole('button', { name: /save as suggestion/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /create preview/i })).not.toBeInTheDocument();
   });
 
   it('shows mismatch warnings when saving a suggestion after the editor revision changed', async () => {
@@ -321,7 +321,7 @@ describe('AiAssistantPanel', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /send/i }));
 
-    expect(await screen.findByText('Suggestion available')).toBeVisible();
+    expect(await screen.findByText('Preview-only suggestion')).toBeVisible();
 
     rerender(
       <AiAssistantPanel
@@ -336,9 +336,9 @@ describe('AiAssistantPanel', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
+    fireEvent.click(screen.getByRole('button', { name: /create preview/i }));
 
-    expect(await screen.findByText('Suggestion draft')).toBeVisible();
+    expect(await screen.findByText('Suggestion preview')).toBeVisible();
     expect(screen.getByText('Document changed since this AI context was captured.')).toBeVisible();
   });
 });

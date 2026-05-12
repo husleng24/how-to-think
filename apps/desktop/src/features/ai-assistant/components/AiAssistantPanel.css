@@ -330,6 +330,12 @@
   color: #7c2e27;
 }
 
+.ai-run-state.completed {
+  border-color: #c9d7d2;
+  background: #eef8f4;
+  color: #24573a;
+}
+
 .ai-run-state > div {
   display: grid;
   gap: 5px;

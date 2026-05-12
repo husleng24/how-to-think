@@ -636,12 +636,12 @@ describe('App workspace lifecycle', () => {
         invokeMock.mock.calls.filter(([command]) => command === 'send_ai_conversation_message'),
       ).toHaveLength(2),
     );
-    expect(await screen.findByText('Suggestion available')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: /save as suggestion/i }));
-    expect(await screen.findByText('Suggestion draft')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: /review suggestion/i }));
+    expect(await screen.findByText('Preview-only suggestion')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /create preview/i }));
+    expect(await screen.findByText('Suggestion preview')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /review preview/i }));
 
-    expect(await screen.findByText('Suggestion draft saved')).toBeVisible();
+    expect(await screen.findByText('Suggestion preview saved')).toBeVisible();
     expect(screen.getByRole('button', { name: /accept whole proposal/i })).toBeDisabled();
     expect(invokeMock.mock.calls.filter(([command]) => command === 'saveMarkdownMindMap')).toHaveLength(0);
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();

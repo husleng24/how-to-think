@@ -115,8 +115,8 @@ export function createSuggestionDraftReview(
     messages: [
       createStatusMessage(
         'suggestion_draft_saved',
-        'Suggestion draft saved',
-        'The draft is isolated from the editor and has not changed the mind map or Markdown file.',
+        'Suggestion preview saved',
+        'The preview is isolated from the editor and has not changed the mind map or Markdown file.',
       ),
       ...draftSource.messages,
     ],
