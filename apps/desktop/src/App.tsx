@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { EditorShell } from './components/EditorShell';
+import { AppShell } from './components/layout';
 import { createMindMapEditorState, createMindMapEditorStore } from './domain/mindMap';
 import type { MindMapEditorState, MindMapEditorStore } from './domain/mindMap';
 import { hasUnsavedChanges, useWorkspaceLifecycle } from './features/workspace';
@@ -96,7 +96,7 @@ export default function App() {
   }, [saveCurrentEditor, workspaceActions]);
 
   return (
-    <EditorShell
+    <AppShell
       state={initialEditorState}
       store={editorStore}
       workspaceState={workspaceState}
