@@ -143,6 +143,42 @@ export interface ExternalChangeBatch {
   watchError?: WorkspaceError | null;
 }
 
+export type WorkspaceWatchStatusKind =
+  | 'inactive'
+  | 'checking'
+  | 'watching'
+  | 'degraded'
+  | 'error';
+
+export interface WorkspaceWatchStatus {
+  kind: WorkspaceWatchStatusKind;
+  watcherActive: boolean;
+  message: string;
+  checkedAt?: string;
+  error?: WorkspaceError | null;
+}
+
+export type WorkspaceFileIndexStatusKind =
+  | 'idle'
+  | 'building'
+  | 'ready'
+  | 'stale'
+  | 'degraded'
+  | 'error';
+
+export interface WorkspaceFileIndexStatus {
+  kind: WorkspaceFileIndexStatusKind;
+  indexedFileCount: number;
+  diagnosticCount: number;
+  message: string;
+  indexedAt?: string;
+}
+
+export interface WorkspaceExternalSyncStatus {
+  watch: WorkspaceWatchStatus;
+  fileIndex: WorkspaceFileIndexStatus;
+}
+
 export interface UserMessage {
   title: string;
   detail: string;
@@ -211,6 +247,7 @@ export interface WorkspaceLifecycleState {
   saveStatus: SaveStatus;
   gitStatus: GitStatusSummary | null;
   gitBlockedState: GitBlockedState | null;
+  externalSyncStatus?: WorkspaceExternalSyncStatus;
   prompt: UnsavedPromptState | null;
   lastError: UserMessage | null;
   isBusy: boolean;

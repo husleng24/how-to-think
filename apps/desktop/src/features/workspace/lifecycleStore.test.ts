@@ -16,6 +16,11 @@ import {
   shouldPromptForAction,
   workspaceLifecycleReducer,
 } from './lifecycleStore';
+import {
+  getWorkspaceDocumentStatus,
+  getWorkspaceFileIndexStatus,
+  getWorkspaceWatchStatus,
+} from './statusModel';
 import type { OpenedDocumentPayload, WorkspaceSession } from './types';
 
 describe('workspace lifecycle store', () => {
@@ -272,6 +277,59 @@ describe('workspace lifecycle store', () => {
     expect(state.files[0].version.token).toBe('external-token');
     expect(state.gitStatus?.token?.token).toBe('external-repo-token');
     expect(state.gitBlockedState).toBeNull();
+    expect(state.externalSyncStatus?.watch.kind).toBe('watching');
+    expect(getWorkspaceFileIndexStatus(state)).toMatchObject({
+      label: 'Index stale',
+      meta: '1 files',
+    });
+    expect(getWorkspaceWatchStatus(state)).toMatchObject({
+      label: 'Watcher active',
+    });
+    expect(getWorkspaceDocumentStatus(state, false)).toMatchObject({
+      label: 'External edit conflict',
+    });
+  });
+
+  it('models degraded watcher and stale index states without dropping open documents', () => {
+    let state = workspaceLifecycleReducer(initialWorkspaceLifecycleState, {
+      type: 'workspace-loaded',
+      session: workspaceSession([workspaceFile('plan.md')]),
+    });
+    state = workspaceLifecycleReducer(state, {
+      type: 'document-opened',
+      payload: openedPayload('plan.md'),
+    });
+
+    state = workspaceLifecycleReducer(state, {
+      type: 'external-change-detected',
+      batch: {
+        workspaceId: 'workspace-1',
+        source: 'refresh',
+        events: [],
+        files: [workspaceFile('plan.md')],
+        repositoryStateChanged: false,
+        detectedAt: '2026-05-10T00:03:00Z',
+        watcherActive: false,
+        watchError: {
+          code: 'watch_unavailable',
+          message: 'Native watcher unavailable.',
+          recoverable: true,
+          operation: 'watchWorkspace',
+        },
+      },
+    });
+
+    expect(state.active?.snapshot.relativePath).toBe('plan.md');
+    expect(state.externalSyncStatus?.watch.kind).toBe('error');
+    expect(state.externalSyncStatus?.fileIndex.kind).toBe('degraded');
+    expect(getWorkspaceWatchStatus(state)).toMatchObject({
+      label: 'Watcher error',
+      tone: 'danger',
+    });
+    expect(getWorkspaceFileIndexStatus(state)).toMatchObject({
+      label: 'Index diagnostics',
+      tone: 'warning',
+    });
   });
 
   it('maps stale Git operation failures without clearing the active document', () => {

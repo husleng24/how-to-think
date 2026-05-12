@@ -21,6 +21,34 @@ export type ExportDialogPhase =
 
 export type ExportDimensionMode = 'layout_bounds' | 'scale' | 'explicit';
 
+export type ExportCommandEntryKind =
+  | 'ready'
+  | 'blocked'
+  | 'validating'
+  | 'rendering'
+  | 'writing'
+  | 'succeeded'
+  | 'warning'
+  | 'failed'
+  | 'cancelled';
+
+export type ExportCommandEntryTone =
+  | 'neutral'
+  | 'info'
+  | 'success'
+  | 'warning'
+  | 'danger'
+  | 'muted';
+
+export interface ExportCommandEntryState {
+  kind: ExportCommandEntryKind;
+  label: string;
+  detail: string;
+  actionLabel: string;
+  disabled: boolean;
+  tone: ExportCommandEntryTone;
+}
+
 export interface ExportDialogContext {
   documentTitle: string;
   documentPath: string | null;
@@ -268,6 +296,110 @@ export function canSubmitExport(
   );
 }
 
+export function getExportCommandEntryState(
+  state: ExportDialogState,
+  context: ExportDialogContext,
+): ExportCommandEntryState {
+  const validationMessages = exportDialogValidationMessages(state, context);
+
+  if (state.phase === 'validating') {
+    return {
+      kind: 'validating',
+      label: 'Validating export',
+      detail: 'Checking format, scope, and output path before rendering.',
+      actionLabel: 'Validating',
+      disabled: true,
+      tone: 'info',
+    };
+  }
+
+  if (state.phase === 'rendering') {
+    return {
+      kind: 'rendering',
+      label: 'Rendering export',
+      detail: 'Preparing the visual snapshot for the desktop export command.',
+      actionLabel: 'Rendering',
+      disabled: true,
+      tone: 'info',
+    };
+  }
+
+  if (state.phase === 'writing') {
+    return {
+      kind: 'writing',
+      label: 'Writing export',
+      detail: 'Passing the prepared artifact to the desktop export command.',
+      actionLabel: 'Writing',
+      disabled: true,
+      tone: 'info',
+    };
+  }
+
+  if (validationMessages.length > 0) {
+    return {
+      kind: 'blocked',
+      label: 'Export blocked',
+      detail: validationMessages[0],
+      actionLabel: 'Export',
+      disabled: true,
+      tone: 'warning',
+    };
+  }
+
+  if (state.phase === 'succeeded' && state.result?.ok) {
+    return {
+      kind: 'succeeded',
+      label: 'Export complete',
+      detail: `Last export wrote ${state.result.outputPath}.`,
+      actionLabel: 'Export again',
+      disabled: false,
+      tone: 'success',
+    };
+  }
+
+  if (state.phase === 'warning-present' && state.result?.ok) {
+    return {
+      kind: 'warning',
+      label: 'Export completed with warnings',
+      detail: state.result.warnings[0]?.message ?? `Last export wrote ${state.result.outputPath}.`,
+      actionLabel: 'Export again',
+      disabled: false,
+      tone: 'warning',
+    };
+  }
+
+  if (state.phase === 'failed' && state.result && !state.result.ok) {
+    return {
+      kind: 'failed',
+      label: 'Export failed',
+      detail: state.result.error.message,
+      actionLabel: 'Retry export',
+      disabled: false,
+      tone: 'danger',
+    };
+  }
+
+  if (state.phase === 'cancelled') {
+    return {
+      kind: 'cancelled',
+      label: 'Export cancelled',
+      detail: 'The previous export run was cancelled before completion.',
+      actionLabel: 'Export',
+      disabled: false,
+      tone: 'muted',
+    };
+  }
+
+  return {
+    kind: 'ready',
+    label: 'Ready to export',
+    detail: `Export ${formatLabel(state.format)} for ${scopeLabel(state.scopeType)}.`,
+    actionLabel: 'Export',
+    disabled: false,
+    tone: 'neutral',
+  };
+}
+
 export function isExportBusy(phase: ExportDialogPhase): boolean {
   return phase === 'validating' || phase === 'rendering' || phase === 'writing';
 }
@@ -408,6 +540,28 @@ function resultPhase(result: ExportResult): ExportDialogPhase {
   }
 
   return result.warnings.length > 0 ? 'warning-present' : 'succeeded';
+}
+
+function formatLabel(format: ExportFormat): string {
+  switch (format) {
+    case 'png':
+      return 'PNG';
+    case 'svg':
+      return 'SVG';
+    case 'pdf':
+      return 'PDF';
+    case 'markdown':
+      return 'Markdown';
+  }
+}
+
+function scopeLabel(scopeType: ExportScope['type']): string {
+  switch (scopeType) {
+    case 'current_file':
+      return 'the current file';
+    case 'selected_branch':
+      return 'the selected branch';
+  }
 }
 
 function directoryFromPath(path: string | null): string {

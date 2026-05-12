@@ -22,6 +22,7 @@ import {
   exportDialogReducer,
   exportDialogValidationMessages,
   exportFormatOptionAvailability,
+  getExportCommandEntryState,
   isExportBusy,
   phaseLabel,
 } from '../application/exportDialogState';
@@ -77,6 +78,7 @@ export function ExportDialog({
   const availability = exportFormatOptionAvailability(state.format);
   const busy = isExportBusy(state.phase);
   const canExport = canSubmitExport(state, context);
+  const commandEntry = getExportCommandEntryState(state, context);
 
   useEffect(() => {
     if (open) {
@@ -486,6 +488,13 @@ export function ExportDialog({
         />
 
         <div className="export-actions">
+          <p
+            className={`export-command-entry ${commandEntry.tone}`}
+            aria-label="Export command state"
+          >
+            <strong>{commandEntry.label}</strong>
+            <span>{commandEntry.detail}</span>
+          </p>
           {busy ? (
             <button className="text-button" type="button" onClick={cancelExport}>
               Cancel
@@ -494,11 +503,12 @@ export function ExportDialog({
           <button
             className="text-button"
             type="button"
-            disabled={!canExport}
+            disabled={!canExport || commandEntry.disabled}
+            title={commandEntry.detail}
             onClick={() => void startExport()}
           >
-            <Download size={16} />
-            Export
+            {busy ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+            {commandEntry.actionLabel}
           </button>
         </div>
       </div>

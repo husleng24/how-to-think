@@ -1,5 +1,6 @@
 import type { MindMapDocument as EditorMindMapDocument } from '../../domain/mindMap';
 import type {
+  LinkIndexSnapshot,
   MarkdownMindMapDocument,
   SaveReason,
   WorkspaceFile,
@@ -25,6 +26,7 @@ import type {
   SaveStatus,
   SaveSucceededPayload,
   UnsavedPromptState,
+  WorkspaceExternalSyncStatus,
   WorkspaceLifecycleState,
   WorkspaceSession,
 } from './types';
@@ -83,6 +85,7 @@ export const initialWorkspaceLifecycleState: WorkspaceLifecycleState = {
   },
   gitStatus: null,
   gitBlockedState: null,
+  externalSyncStatus: noWorkspaceExternalSyncStatus(),
   prompt: null,
   lastError: null,
   isBusy: false,
@@ -110,6 +113,7 @@ export function workspaceLifecycleReducer(
         saveStatus: noFileStatus(),
         gitStatus: null,
         gitBlockedState: null,
+        externalSyncStatus: noWorkspaceExternalSyncStatus(),
         isBusy: false,
       };
 
@@ -123,6 +127,7 @@ export function workspaceLifecycleReducer(
         saveStatus: noFileStatus(),
         gitStatus: null,
         gitBlockedState: null,
+        externalSyncStatus: externalSyncStatusForWorkspace(action.session.files),
         lastError: null,
         isBusy: false,
       };
@@ -160,6 +165,7 @@ export function workspaceLifecycleReducer(
       return {
         ...state,
         files: sortWorkspaceFiles(action.files),
+        externalSyncStatus: externalSyncStatusForWorkspace(action.files, state.externalSyncStatus),
         isBusy: false,
       };
 
@@ -208,6 +214,11 @@ export function workspaceLifecycleReducer(
         active,
         files: sortWorkspaceFiles(action.payload.result.files),
         recentFiles: rememberRecentFile(state.recentFiles, relativePath),
+        externalSyncStatus: externalSyncStatusForOpenDocument(
+          action.payload.result.linkIndex,
+          action.payload.result.document.diagnostics.length,
+          state.externalSyncStatus,
+        ),
         saveStatus: {
           kind: 'saved',
           message: 'Saved',
@@ -237,6 +248,11 @@ export function workspaceLifecycleReducer(
         active,
         files: sortWorkspaceFiles(action.payload.result.files),
         recentFiles: rememberRecentFile(state.recentFiles, relativePath),
+        externalSyncStatus: externalSyncStatusForOpenDocument(
+          action.payload.result.linkIndex,
+          action.payload.result.document.diagnostics.length,
+          state.externalSyncStatus,
+        ),
         saveStatus: {
           kind: 'saved',
           message: 'Restored from Git history',
@@ -321,6 +337,11 @@ export function workspaceLifecycleReducer(
         ...state,
         active,
         files: result.files && result.files.length > 0 ? sortWorkspaceFiles(result.files) : state.files,
+        externalSyncStatus: externalSyncStatusForOpenDocument(
+          result.linkIndex ?? state.active.linkIndex,
+          result.diagnostics.length,
+          state.externalSyncStatus,
+        ),
         saveStatus: isCurrentRevisionSaved
           ? {
               kind: 'saved',
@@ -343,6 +364,7 @@ export function workspaceLifecycleReducer(
           ...state.active,
           inFlightSave: null,
         },
+        externalSyncStatus: staleExternalSyncStatus(state.externalSyncStatus, action.request.relativePath),
         saveStatus: saveStatusFromBlockedResult(action.result),
       };
 
@@ -357,6 +379,7 @@ export function workspaceLifecycleReducer(
           ...state.active,
           inFlightSave: null,
         },
+        externalSyncStatus: staleExternalSyncStatus(state.externalSyncStatus, action.request.relativePath),
         saveStatus: saveStatusFromError(action.error),
         lastError: mapWorkspaceError(action.error),
       };
@@ -493,6 +516,10 @@ function applyExternalChangeBatch(
   const gitBlockedState = batch.gitStatus
     ? gitBlockedStateForRepository(batch.gitStatus.repositoryState, 'refresh')
     : state.gitBlockedState;
+  const externalSyncStatus = externalSyncStatusFromBatch(
+    batch,
+    state.active?.linkIndex.diagnostics.length ?? 0,
+  );
 
   if (!state.active || !activeEvent) {
     return {
@@ -500,6 +527,7 @@ function applyExternalChangeBatch(
       files: sortWorkspaceFiles([...batch.files]),
       gitStatus: batch.gitStatus ?? state.gitStatus,
       gitBlockedState,
+      externalSyncStatus,
       isBusy: false,
     };
   }
@@ -512,6 +540,10 @@ function applyExternalChangeBatch(
     saveStatus: saveStatus ?? state.saveStatus,
     gitStatus: batch.gitStatus ?? state.gitStatus,
     gitBlockedState,
+    externalSyncStatus:
+      saveStatus?.kind === 'conflict' || saveStatus?.kind === 'missing'
+        ? staleExternalSyncStatus(externalSyncStatus, state.active.snapshot.relativePath)
+        : externalSyncStatus,
     isBusy: false,
   };
 }
@@ -578,6 +610,138 @@ function isGitServiceOperation(value: unknown): value is GitServiceOperation {
 
 function sortWorkspaceFiles(files: WorkspaceFile[]): WorkspaceFile[] {
   return [...files].sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+}
+
+function noWorkspaceExternalSyncStatus(): WorkspaceExternalSyncStatus {
+  return {
+    watch: {
+      kind: 'inactive',
+      watcherActive: false,
+      message: 'No workspace is open.',
+    },
+    fileIndex: {
+      kind: 'idle',
+      indexedFileCount: 0,
+      diagnosticCount: 0,
+      message: 'Open a workspace to build the Markdown file index.',
+    },
+  };
+}
+
+function externalSyncStatusForWorkspace(
+  files: readonly WorkspaceFile[],
+  previous?: WorkspaceExternalSyncStatus,
+): WorkspaceExternalSyncStatus {
+  return {
+    watch: previous?.watch ?? {
+      kind: 'checking',
+      watcherActive: false,
+      message: 'Starting workspace change detection.',
+    },
+    fileIndex: {
+      kind: files.length > 0 ? 'ready' : 'idle',
+      indexedFileCount: files.length,
+      diagnosticCount: previous?.fileIndex.diagnosticCount ?? 0,
+      message:
+        files.length > 0
+          ? `${files.length} Markdown file${files.length === 1 ? '' : 's'} indexed.`
+          : 'No Markdown files are indexed yet.',
+      indexedAt: previous?.fileIndex.indexedAt,
+    },
+  };
+}
+
+function externalSyncStatusForOpenDocument(
+  linkIndex: LinkIndexSnapshot,
+  documentDiagnosticCount: number,
+  previous?: WorkspaceExternalSyncStatus,
+): WorkspaceExternalSyncStatus {
+  const diagnosticCount = documentDiagnosticCount + linkIndex.diagnostics.length;
+
+  return {
+    watch: previous?.watch ?? {
+      kind: 'checking',
+      watcherActive: false,
+      message: 'Starting workspace change detection.',
+    },
+    fileIndex: {
+      kind: diagnosticCount > 0 ? 'degraded' : 'ready',
+      indexedFileCount: linkIndex.files.length,
+      diagnosticCount,
+      message:
+        diagnosticCount > 0
+          ? `${diagnosticCount} Markdown or link diagnostic${diagnosticCount === 1 ? '' : 's'} need review.`
+          : `${linkIndex.files.length} indexed Markdown file${linkIndex.files.length === 1 ? '' : 's'} ready.`,
+      indexedAt: previous?.fileIndex.indexedAt,
+    },
+  };
+}
+
+function externalSyncStatusFromBatch(
+  batch: ExternalChangeBatch,
+  activeLinkDiagnosticCount: number,
+): WorkspaceExternalSyncStatus {
+  const diagnosticCount = activeLinkDiagnosticCount + (batch.watchError ? 1 : 0);
+  const watchKind = batch.watchError
+    ? 'error'
+    : batch.watcherActive
+      ? 'watching'
+      : 'degraded';
+
+  return {
+    watch: {
+      kind: watchKind,
+      watcherActive: batch.watcherActive,
+      message: watchStatusMessage(watchKind, batch.source),
+      checkedAt: batch.detectedAt,
+      error: batch.watchError ?? null,
+    },
+    fileIndex: {
+      kind: diagnosticCount > 0 ? 'degraded' : 'ready',
+      indexedFileCount: batch.files.length,
+      diagnosticCount,
+      message:
+        diagnosticCount > 0
+          ? `${diagnosticCount} workspace sync diagnostic${diagnosticCount === 1 ? '' : 's'} need review.`
+          : `${batch.files.length} Markdown file${batch.files.length === 1 ? '' : 's'} indexed after ${batch.source}.`,
+      indexedAt: batch.detectedAt,
+    },
+  };
+}
+
+function staleExternalSyncStatus(
+  previous: WorkspaceExternalSyncStatus | undefined,
+  relativePath: WorkspaceRelativePath,
+): WorkspaceExternalSyncStatus | undefined {
+  if (!previous) {
+    return previous;
+  }
+
+  return {
+    ...previous,
+    fileIndex: {
+      ...previous.fileIndex,
+      kind: 'stale',
+      message: `File index needs refresh before saving ${relativePath}.`,
+    },
+  };
+}
+
+function watchStatusMessage(
+  kind: WorkspaceExternalSyncStatus['watch']['kind'],
+  source: ExternalChangeBatch['source'],
+): string {
+  if (kind === 'watching') {
+    return source === 'watcher'
+      ? 'Live workspace watcher is active.'
+      : 'Workspace state refreshed while watcher stays active.';
+  }
+
+  if (kind === 'error') {
+    return 'Workspace watcher reported an error; manual refresh is available.';
+  }
+
+  return 'Workspace watcher is degraded; using refresh checks.';
 }
 
 function rememberRecentFile(

@@ -9,6 +9,7 @@ import type { MindMapCommand, MindMapEditorState, MindMapEditorStore } from '../
 import {
   AiAssistantPanel,
   AiProviderSettingsPanel,
+  getAiProviderRuntimeStatus,
   useAiProviderSettings,
 } from '../../features/ai-assistant';
 import type { AiProviderSettingsController, AiSuggestionDraft } from '../../features/ai-assistant';
@@ -36,7 +37,12 @@ import { ProjectListPage } from '../../features/projects';
 import { SettingsPage } from '../../features/settings';
 import type { CommandPaletteItem, CommandSectionId, CommandViewMode } from '../../features/commands';
 import { useCommandPalette } from '../../features/commands';
-import type { WorkspaceLifecycleState } from '../../features/workspace';
+import {
+  getWorkspaceDocumentStatus,
+  getWorkspaceFileIndexStatus,
+  getWorkspaceWatchStatus,
+} from '../../features/workspace';
+import type { WorkspaceLifecycleState, WorkspaceStatusItem } from '../../features/workspace';
 import type {
   FileVersion,
   WorkspaceRelativePath,
@@ -137,6 +143,22 @@ export function AppShell({
   const activePath = workspaceState.active?.snapshot.relativePath;
   const canOpenAiAssistant = Boolean(workspaceState.workspace && workspaceState.active);
   const titleSubtitle = workspaceState.workspace?.displayPath ?? 'No workspace selected';
+  const documentStatus = getWorkspaceDocumentStatus(workspaceState, editorState.isDirty);
+  const fileIndexStatus = getWorkspaceFileIndexStatus(workspaceState);
+  const watchStatus = getWorkspaceWatchStatus(workspaceState);
+  const aiRuntimeStatus = getAiProviderRuntimeStatus({
+    settings: aiProviderController.settings,
+    setupState: aiProviderController.setupState,
+    loading: aiProviderController.loading,
+    error: aiProviderController.error,
+  });
+  const aiStatus: WorkspaceStatusItem = {
+    kind: aiRuntimeStatus.kind,
+    label: aiRuntimeStatus.label,
+    detail: aiRuntimeStatus.detail,
+    tone: aiRuntimeStatus.tone,
+    meta: aiRuntimeStatus.providerName,
+  };
   const toggleSidebar = useCallback(() => setSidebarCollapsed((collapsed) => !collapsed), []);
   const toggleDetailPanel = useCallback(
     () => setDetailPanelCollapsed((collapsed) => !collapsed),
@@ -392,6 +414,19 @@ export function AppShell({
             </dl>
           </section>
 
+          <section
+            className="inspector-section desktop-status-panel"
+            aria-label="Workspace status overview"
+          >
+            <p className="field-label">Status overview</p>
+            <div className="status-summary-list">
+              <StatusSummaryRow item={documentStatus} />
+              <StatusSummaryRow item={fileIndexStatus} />
+              <StatusSummaryRow item={watchStatus} />
+              <StatusSummaryRow item={aiStatus} />
+            </div>
+          </section>
+
           <GitWorkflowPanel
             workspaceState={workspaceState}
             workspaceActions={workspaceActions}
@@ -472,6 +507,7 @@ export function AppShell({
         activePath={activePath}
         sidebarCollapsed={sidebarCollapsed}
         detailPanelCollapsed={detailPanelCollapsed}
+        statusItems={[documentStatus, fileIndexStatus, aiStatus]}
       />
 
       <CommandPalette
@@ -556,6 +592,19 @@ function toShellCommand(command: CommandPaletteItem): CommandPaletteCommand {
     icon: <Icon size={16} />,
     run: command.run,
   };
+}
+
+function StatusSummaryRow({ item }: { item: WorkspaceStatusItem }) {
+  return (
+    <div className={`status-summary-row ${item.tone}`}>
+      <span className="status-summary-dot" aria-hidden="true" />
+      <span>
+        <strong>{item.label}</strong>
+        <small>{item.detail}</small>
+        {item.meta ? <em>{item.meta}</em> : null}
+      </span>
+    </div>
+  );
 }
 
 function createProposalReviewEditorSnapshot(

@@ -4,7 +4,9 @@ import type { AiProviderConfig, AiProviderSettings } from '../types';
 import {
   createDefaultAiProviderInput,
   formatArgumentText,
+  getAiProviderRuntimeStatus,
   getAiProviderHealthNextAction,
+  getAiProviderSettingsPersistenceState,
   getAiProviderSetupState,
   parseArgumentText,
   parseEnvironmentAllowlistText,
@@ -77,6 +79,64 @@ describe('AI provider setup', () => {
     expect(provider.displayName).toBe('Claude');
     expect(provider.healthCheckArgs).toEqual(['--version']);
     expect(provider.environmentAllowlist).toBeUndefined();
+  });
+
+  it('models runtime and persistence status for AI settings surfaces', () => {
+    const provider = providerFixture({
+      lastHealthStatus: {
+        status: 'ok',
+        checkedAt: '2026-05-10T00:00:00Z',
+        message: 'Provider responded.',
+      },
+    });
+    const settings: AiProviderSettings = {
+      activeProviderId: provider.id,
+      providers: [provider],
+    };
+    const setupState = getAiProviderSetupState(settings);
+
+    expect(
+      getAiProviderRuntimeStatus({
+        settings,
+        setupState,
+        loading: false,
+        error: null,
+      }),
+    ).toMatchObject({
+      kind: 'ready',
+      label: 'AI ready',
+      tone: 'success',
+      providerName: 'Local Codex',
+    });
+
+    expect(
+      getAiProviderSettingsPersistenceState({
+        loading: false,
+        error: null,
+        pendingAction: null,
+        formDirty: true,
+        selectedProviderId: provider.id,
+        providerCount: 1,
+      }),
+    ).toMatchObject({
+      kind: 'dirty',
+      label: 'Unsaved provider edits',
+      tone: 'warning',
+    });
+
+    expect(
+      getAiProviderSettingsPersistenceState({
+        loading: false,
+        error: null,
+        pendingAction: 'save',
+        formDirty: true,
+        selectedProviderId: provider.id,
+        providerCount: 1,
+      }),
+    ).toMatchObject({
+      kind: 'saving',
+      label: 'Saving provider settings',
+    });
   });
 });
 

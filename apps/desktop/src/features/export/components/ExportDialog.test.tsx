@@ -66,7 +66,9 @@ describe('ExportDialog', () => {
       }
 
       expect(await screen.findByText('Succeeded')).toBeVisible();
-      expect(screen.getByText((text) => text.includes(payload.request.options.outputPath))).toBeVisible();
+      expect(
+        screen.getAllByText((text) => text.includes(payload.request.options.outputPath)).length,
+      ).toBeGreaterThan(0);
     },
   );
 
@@ -94,7 +96,7 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
 
     expect(await screen.findByText('Warning present')).toBeVisible();
-    expect(screen.getByText('Map was scaled to fit the PDF page.')).toBeVisible();
+    expect(screen.getAllByText('Map was scaled to fit the PDF page.').length).toBeGreaterThan(0);
   });
 
   it('keeps the editor state intact after failure and supports retry', async () => {
@@ -127,7 +129,7 @@ describe('ExportDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Export' }));
 
     expect(await screen.findByText('Failed')).toBeVisible();
-    expect(screen.getByText('Renderer failed.')).toBeVisible();
+    expect(screen.getAllByText('Renderer failed.').length).toBeGreaterThan(0);
     expect(editorState.document).toEqual(before);
 
     fireEvent.change(screen.getByLabelText('Output path'), {
@@ -194,7 +196,7 @@ describe('ExportDialog', () => {
     renderDialog({}, runExport);
     fireEvent.change(screen.getByLabelText('Output path'), { target: { value: '' } });
 
-    expect(screen.getByText('Output path is required.')).toBeVisible();
+    expect(screen.getAllByText('Output path is required.').length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'Export' })).toBeDisabled();
 
     fireEvent.change(screen.getByLabelText('Output path'), {
@@ -204,7 +206,7 @@ describe('ExportDialog', () => {
 
     const dialog = await screen.findByRole('dialog', { name: 'Export mind map' });
     expect(within(dialog).getByText('Failed')).toBeVisible();
-    expect(within(dialog).getByText('Export output path already exists.')).toBeVisible();
+    expect(within(dialog).getAllByText('Export output path already exists.').length).toBeGreaterThan(0);
   });
 });
 

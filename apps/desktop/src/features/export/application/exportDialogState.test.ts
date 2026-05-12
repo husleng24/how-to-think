@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import type { MindMapDocument, MindMapNode, NodeId } from '../../../domain/mindMap';
 import { createMindMapEditorState } from '../../../domain/mindMap';
-import { validateExportRequest } from '../domain/contract';
+import { EXPORT_CONTRACT_VERSION, createExportError, createExportWarning, validateExportRequest } from '../domain/contract';
+import type { ExportResult } from '../domain/types';
 import {
   createExportDialogContext,
   prepareDesktopExport,
@@ -15,6 +16,7 @@ import {
   exportDialogReducer,
   exportDialogValidationMessages,
   exportFormatOptionAvailability,
+  getExportCommandEntryState,
 } from './exportDialogState';
 import type { ExportDialogContext } from './exportDialogState';
 
@@ -103,6 +105,50 @@ describe('export dialog state', () => {
       markdown: {
         mode: 'markmap_hierarchy',
       },
+    });
+  });
+
+  it('models export command entry states for blocked, busy, and terminal runs', () => {
+    const context = exportContext();
+    const ready = createExportDialogState(context, 'png');
+    const blocked = {
+      ...ready,
+      outputPath: '',
+    };
+    const rendering = exportDialogReducer(ready, { type: 'set-phase', phase: 'rendering' });
+    const failed = exportDialogReducer(ready, {
+      type: 'complete',
+      result: failedExportResult('exports/product-strategy.png'),
+    });
+    const warning = exportDialogReducer(ready, {
+      type: 'complete',
+      result: warningExportResult('exports/product-strategy.png'),
+    });
+
+    expect(getExportCommandEntryState(ready, context)).toMatchObject({
+      kind: 'ready',
+      disabled: false,
+      actionLabel: 'Export',
+    });
+    expect(getExportCommandEntryState(blocked, context)).toMatchObject({
+      kind: 'blocked',
+      disabled: true,
+      detail: 'Output path is required.',
+    });
+    expect(getExportCommandEntryState(rendering, context)).toMatchObject({
+      kind: 'rendering',
+      disabled: true,
+      actionLabel: 'Rendering',
+    });
+    expect(getExportCommandEntryState(failed, context)).toMatchObject({
+      kind: 'failed',
+      disabled: false,
+      actionLabel: 'Retry export',
+    });
+    expect(getExportCommandEntryState(warning, context)).toMatchObject({
+      kind: 'warning',
+      disabled: false,
+      actionLabel: 'Export again',
     });
   });
 
@@ -196,6 +242,32 @@ function exportContext(overrides: Partial<ExportDialogContext> = {}): ExportDial
     selectedNodeTitle: 'Roadmap',
     hasUnsavedChanges: false,
     ...overrides,
+  };
+}
+
+function failedExportResult(outputPath: string): ExportResult {
+  return {
+    ok: false,
+    contractVersion: EXPORT_CONTRACT_VERSION,
+    format: 'png',
+    outputPath,
+    warnings: [],
+    error: createExportError('render_failed', 'Renderer failed.'),
+  };
+}
+
+function warningExportResult(outputPath: string): ExportResult {
+  return {
+    ok: true,
+    contractVersion: EXPORT_CONTRACT_VERSION,
+    format: 'png',
+    outputPath,
+    warnings: [createExportWarning('large_map_scaled', 'Layout bounds were clamped.')],
+    artifact: {
+      mimeType: 'image/png',
+      byteSize: 128,
+      renderedNodeCount: 2,
+    },
   };
 }
 

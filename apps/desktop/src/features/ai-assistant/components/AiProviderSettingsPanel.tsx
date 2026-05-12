@@ -15,6 +15,7 @@ import {
   findEditableProvider,
   formatArgumentText,
   formatEnvironmentAllowlistText,
+  getAiProviderSettingsPersistenceState,
   getAiProviderHealthLabel,
   getAiProviderKindLabel,
   parseArgumentText,
@@ -79,6 +80,18 @@ export function AiProviderSettingsPanel({ controller }: AiProviderSettingsPanelP
 
   const activeHealth = setupState.activeProvider?.lastHealthStatus;
   const activeHealthStatus = activeHealth?.status ?? 'unknown';
+  const formDirty = useMemo(
+    () => isProviderFormDirty(form, editableProvider, selectedProviderId),
+    [editableProvider, form, selectedProviderId],
+  );
+  const persistenceState = getAiProviderSettingsPersistenceState({
+    loading: controller.loading,
+    error: controller.error,
+    pendingAction,
+    formDirty,
+    selectedProviderId,
+    providerCount: settings.providers.length,
+  });
 
   async function saveCurrentProvider() {
     const provider = formToProviderInput(form);
@@ -146,6 +159,11 @@ export function AiProviderSettingsPanel({ controller }: AiProviderSettingsPanelP
       <p className="ai-provider-next-action">
         <strong>{setupState.reason}</strong>
         <span>{setupState.nextAction}</span>
+      </p>
+
+      <p className={`ai-provider-persistence ${persistenceState.kind}`}>
+        <strong>{persistenceState.label}</strong>
+        <span>{persistenceState.detail}</span>
       </p>
 
       <div className="ai-provider-list" aria-label="Configured AI providers">
@@ -409,6 +427,29 @@ function formToProviderInput(form: ProviderFormState): AiProviderConfigInput {
     maxOutputBytes: parseInteger(form.maxOutputBytes, 64 * 1024),
     enabled: form.enabled,
   };
+}
+
+function isProviderFormDirty(
+  form: ProviderFormState,
+  provider: AiProviderConfig | null,
+  selectedProviderId: string | null,
+): boolean {
+  if (!selectedProviderId || !provider) {
+    return false;
+  }
+
+  return (
+    form.displayName !== provider.displayName ||
+    form.kind !== provider.kind ||
+    form.executablePath !== provider.executablePath ||
+    form.argumentText !== formatArgumentText(provider.argumentTemplate) ||
+    form.healthCheckText !== formatArgumentText(provider.healthCheckArgs) ||
+    form.environmentText !== formatEnvironmentAllowlistText(provider.environmentAllowlist) ||
+    form.workingDirectory !== (provider.workingDirectory ?? '') ||
+    form.timeoutSeconds !== String(provider.timeoutSeconds) ||
+    form.maxOutputBytes !== String(provider.maxOutputBytes) ||
+    form.enabled !== provider.enabled
+  );
 }
 
 function createProviderId(kind: AiProviderKind, displayName: string): string {

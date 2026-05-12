@@ -44,6 +44,7 @@
 
 .ai-provider-next-action,
 .ai-provider-health,
+.ai-provider-persistence,
 .ai-provider-error,
 .ai-provider-empty {
   margin: 0;
@@ -53,14 +54,46 @@
 }
 
 .ai-provider-next-action,
-.ai-provider-health {
+.ai-provider-health,
+.ai-provider-persistence {
   display: grid;
   gap: 3px;
 }
 
 .ai-provider-next-action strong,
-.ai-provider-health strong {
+.ai-provider-health strong,
+.ai-provider-persistence strong {
   color: #202225;
+}
+
+.ai-provider-persistence {
+  padding: 9px;
+  border: 1px solid #ded4c4;
+  border-radius: 8px;
+  background: #fffdf8;
+}
+
+.ai-provider-persistence.loading,
+.ai-provider-persistence.saving,
+.ai-provider-persistence.checking,
+.ai-provider-persistence.draft {
+  border-color: #b8b6d8;
+}
+
+.ai-provider-persistence.dirty,
+.ai-provider-persistence.removing {
+  border-color: #d6c7a6;
+  color: #7c4b18;
+}
+
+.ai-provider-persistence.persisted {
+  border-color: #b6cfbd;
+  color: #24573a;
+}
+
+.ai-provider-persistence.error {
+  border-color: #d2a29b;
+  color: #8a2d24;
 }
 
 .ai-provider-list,

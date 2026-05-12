@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { beforeEach, vi } from 'vitest';
 
 import App from './App';
+import './styles.css';
 
 vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn(),
@@ -41,5 +42,20 @@ describe('App shell', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog', { name: /command palette/i })).not.toBeInTheDocument(),
     );
+  });
+
+  it('renders viewport-constrained desktop status surfaces', async () => {
+    render(<App />);
+
+    const shell = document.querySelector('.app-shell-root');
+    const editor = await screen.findByRole('main', { name: /mind map editor/i });
+
+    expect(shell).toBeInstanceOf(HTMLElement);
+    expect(getComputedStyle(document.body).overflow).toBe('hidden');
+    expect(getComputedStyle(shell as HTMLElement).display).toBe('grid');
+    expect(getComputedStyle(editor).overflow).toBe('auto');
+    expect(screen.getByRole('region', { name: 'Workspace status overview' })).toBeVisible();
+    expect(screen.getAllByText('Index idle').length).toBeGreaterThan(0);
+    expect(screen.getAllByText('AI blocked').length).toBeGreaterThan(0);
   });
 });

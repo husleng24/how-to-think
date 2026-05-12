@@ -1,3 +1,8 @@
+interface StatusBarItem {
+  label: string;
+  tone?: string;
+}
+
 interface StatusBarProps {
   visibleNodeCount: number;
   zoomPercent: number;
@@ -5,6 +10,7 @@ interface StatusBarProps {
   activePath?: string;
   sidebarCollapsed: boolean;
   detailPanelCollapsed: boolean;
+  statusItems?: readonly StatusBarItem[];
 }
 
 export function StatusBar({
@@ -14,9 +20,15 @@ export function StatusBar({
   activePath,
   sidebarCollapsed,
   detailPanelCollapsed,
+  statusItems = [],
 }: StatusBarProps) {
   return (
     <footer className="app-status-bar" aria-label="Status">
+      {statusItems.map((item) => (
+        <span className={`status-chip ${item.tone ?? 'neutral'}`} key={item.label}>
+          {item.label}
+        </span>
+      ))}
       <span>{workspaceName ? 'Workspace ready' : 'No workspace'}</span>
       <span>{activePath ?? 'No file open'}</span>
       <span>{visibleNodeCount} visible nodes</span>
