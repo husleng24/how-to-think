@@ -1,13 +1,3 @@
-import {
-  FilePlus2,
-  FolderOpen,
-  Gauge,
-  PanelLeftClose,
-  PanelRightClose,
-  Save,
-  Settings,
-  Workflow,
-} from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import {
@@ -35,14 +25,17 @@ import type {
 import { DashboardPage } from '../../features/dashboard';
 import { ExportDialog } from '../../features/export';
 import { GitWorkflowPanel } from '../../features/git-workflow';
+import { MarkdownEditorMock, createMockMarkdownFromMindMapDocument } from '../../features/markdown';
 import {
   CompatibilityDiagnosticsPanel,
   resolveWorkspaceLink,
 } from '../../features/markdown-compat';
 import type { LinkInteractionController } from '../../features/markdown-compat';
-import { MindMapCanvas } from '../../features/mindmap/MindMapCanvas';
+import { MindMapCanvasPane } from '../../features/mindmap';
 import { ProjectListPage } from '../../features/projects';
 import { SettingsPage } from '../../features/settings';
+import type { CommandPaletteItem, CommandSectionId, CommandViewMode } from '../../features/commands';
+import { useCommandPalette } from '../../features/commands';
 import type { WorkspaceLifecycleState } from '../../features/workspace';
 import type {
   FileVersion,
@@ -56,6 +49,7 @@ import { MainContent } from './MainContent';
 import { Sidebar } from './Sidebar';
 import { StatusBar } from './StatusBar';
 import { Topbar } from './Topbar';
+import { WorkspaceSplit } from './WorkspaceSplit';
 import type {
   CommandPaletteCommand,
   OutlineNodeItem,
@@ -106,7 +100,7 @@ export function AppShell({
   const [theme, setTheme] = useState<ThemeName>(() => getInitialTheme());
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [detailPanelCollapsed, setDetailPanelCollapsed] = useState(false);
-  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [workspaceViewMode, setWorkspaceViewMode] = useState<CommandViewMode>('split');
   const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
   const [isExportDialogOpen, setIsExportDialogOpen] = useState(false);
   const [isGitSnapshotDialogOpen, setIsGitSnapshotDialogOpen] = useState(false);
@@ -143,28 +137,44 @@ export function AppShell({
   const activePath = workspaceState.active?.snapshot.relativePath;
   const canOpenAiAssistant = Boolean(workspaceState.workspace && workspaceState.active);
   const titleSubtitle = workspaceState.workspace?.displayPath ?? 'No workspace selected';
+  const toggleSidebar = useCallback(() => setSidebarCollapsed((collapsed) => !collapsed), []);
+  const toggleDetailPanel = useCallback(
+    () => setDetailPanelCollapsed((collapsed) => !collapsed),
+    [],
+  );
+  const toggleTheme = useCallback(
+    () => setTheme((current) => (current === 'dark' ? 'light' : 'dark')),
+    [],
+  );
+  const switchWorkspaceMode = useCallback((mode: CommandViewMode) => {
+    setWorkspaceViewMode(mode);
+    setActiveView('map');
+  }, []);
+  const switchShellSection = useCallback((sectionId: CommandSectionId) => {
+    setActiveView(sectionId);
+  }, []);
+  const {
+    closeCommandPalette,
+    commandPaletteOpen,
+    commands: registeredCommands,
+    openCommandPalette,
+  } = useCommandPalette({
+    detailCollapsed: detailPanelCollapsed,
+    onSectionChange: switchShellSection,
+    onToggleDetailPanel: toggleDetailPanel,
+    onToggleSidebar: toggleSidebar,
+    onToggleTheme: toggleTheme,
+    onViewModeChange: switchWorkspaceMode,
+    sidebarCollapsed,
+  });
+  const commandPaletteCommands = useMemo(
+    () => registeredCommands.map(toShellCommand),
+    [registeredCommands],
+  );
 
   useEffect(() => {
     setMarkdownPathInput(workspaceState.active?.snapshot.relativePath ?? '');
   }, [workspaceState.active?.snapshot.relativePath]);
-
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
-        event.preventDefault();
-        setCommandPaletteOpen(true);
-        return;
-      }
-
-      if (event.key === 'Escape' && commandPaletteOpen) {
-        event.preventDefault();
-        setCommandPaletteOpen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [commandPaletteOpen]);
 
   const beginProposalApply = useCallback(
     (review: ProposalReview) => {
@@ -219,85 +229,27 @@ export function AppShell({
     };
   }, [workspaceActions, workspaceState.active, workspaceState.workspace]);
 
-  const commandPaletteCommands = useMemo<CommandPaletteCommand[]>(
-    () => [
-      {
-        id: 'view-map',
-        label: 'Open mind map',
-        detail: activePath ?? 'Main editor surface',
-        shortcut: 'M',
-        icon: <Workflow size={16} />,
-        run: () => setActiveView('map'),
-      },
-      {
-        id: 'view-dashboard',
-        label: 'Open dashboard',
-        detail: 'Workspace overview and recent files',
-        icon: <Gauge size={16} />,
-        run: () => setActiveView('dashboard'),
-      },
-      {
-        id: 'view-projects',
-        label: 'Open Markdown files',
-        detail: 'Browse and create workspace files',
-        icon: <FolderOpen size={16} />,
-        run: () => setActiveView('projects'),
-      },
-      {
-        id: 'view-settings',
-        label: 'Open settings',
-        detail: 'Theme and local preferences',
-        icon: <Settings size={16} />,
-        run: () => setActiveView('settings'),
-      },
-      {
-        id: 'save-markdown',
-        label: 'Save Markdown',
-        detail: activePath ?? 'No active file',
-        shortcut: 'Ctrl S',
-        disabled: !activePath,
-        icon: <Save size={16} />,
-        run: () => {
-          void workspaceActions.saveActiveDocument?.();
-        },
-      },
-      {
-        id: 'new-markdown',
-        label: 'Create Markdown file',
-        detail: workspaceState.workspace ? 'Use the sidebar file form' : 'Open a workspace first',
-        disabled: !workspaceState.workspace,
-        icon: <FilePlus2 size={16} />,
-        run: () => {
-          setSidebarCollapsed(false);
-          setActiveView('projects');
-        },
-      },
-      {
-        id: 'toggle-sidebar',
-        label: sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar',
-        icon: <PanelLeftClose size={16} />,
-        run: () => setSidebarCollapsed((collapsed) => !collapsed),
-      },
-      {
-        id: 'toggle-details',
-        label: detailPanelCollapsed ? 'Expand detail panel' : 'Collapse detail panel',
-        icon: <PanelRightClose size={16} />,
-        run: () => setDetailPanelCollapsed((collapsed) => !collapsed),
-      },
-    ],
-    [activePath, detailPanelCollapsed, sidebarCollapsed, workspaceActions, workspaceState.workspace],
-  );
-
   const mapView = (
-    <div className="map-stage">
-      <MindMapCanvas
-        state={editorState}
-        onCommand={dispatch}
-        onUndo={() => store.undo()}
-        onRedo={() => store.redo()}
-        linkInteraction={linkInteraction}
+    <WorkspaceSplit
+      mode={workspaceViewMode}
+      markdownPane={
+        <MarkdownEditorMock
+          value={workspaceState.active?.snapshot.content ?? createMockMarkdownFromMindMapDocument(document)}
+          title={document.title}
+          sourcePath={activePath}
+          status={workspaceState.saveStatus.kind === 'unsaved' ? 'Unsaved changes' : 'Preview source'}
+        />
+      }
+      mapPane={
+        <MindMapCanvasPane
+          state={editorState}
+          onCommand={dispatch}
+          onUndo={() => store.undo()}
+          onRedo={() => store.redo()}
+          linkInteraction={linkInteraction}
+        />
+      }
       />
-    </div>
   );
 
   return (
@@ -321,8 +273,8 @@ export function AppShell({
           sidebarCollapsed={sidebarCollapsed}
           detailPanelCollapsed={detailPanelCollapsed}
           onViewChange={setActiveView}
-          onToggleSidebar={() => setSidebarCollapsed((collapsed) => !collapsed)}
-          onToggleDetailPanel={() => setDetailPanelCollapsed((collapsed) => !collapsed)}
+          onToggleSidebar={toggleSidebar}
+          onToggleDetailPanel={toggleDetailPanel}
         />
 
         <Sidebar
@@ -346,7 +298,7 @@ export function AppShell({
             canOpenAiAssistant={canOpenAiAssistant}
             isAiAssistantOpen={isAiAssistantOpen}
             detailPanelCollapsed={detailPanelCollapsed}
-            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+            onOpenCommandPalette={openCommandPalette}
             onSaveMarkdown={() => void workspaceActions.saveActiveDocument?.()}
             onOpenExport={() => setIsExportDialogOpen(true)}
             onToggleAiAssistant={() => setIsAiAssistantOpen((open) => !open)}
@@ -395,7 +347,7 @@ export function AppShell({
 
         <DetailPanel
           collapsed={detailPanelCollapsed}
-          onToggleCollapsed={() => setDetailPanelCollapsed((collapsed) => !collapsed)}
+          onToggleCollapsed={toggleDetailPanel}
         >
           <section className="inspector-section">
             <p className="field-label">Selected node</p>
@@ -525,7 +477,7 @@ export function AppShell({
       <CommandPalette
         open={commandPaletteOpen}
         commands={commandPaletteCommands}
-        onClose={() => setCommandPaletteOpen(false)}
+        onClose={closeCommandPalette}
       />
 
       <AiAssistantPanel
@@ -590,6 +542,20 @@ function getInitialTheme(): ThemeName {
   }
 
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
+function toShellCommand(command: CommandPaletteItem): CommandPaletteCommand {
+  const Icon = command.icon;
+
+  return {
+    id: command.id,
+    label: command.label,
+    detail: command.disabledReason ?? command.description,
+    shortcut: command.shortcut,
+    disabled: Boolean(command.disabledReason),
+    icon: <Icon size={16} />,
+    run: command.run,
+  };
 }
 
 function createProposalReviewEditorSnapshot(

@@ -34,7 +34,7 @@ describe('App shell', () => {
     fireEvent.keyDown(window, { key: 'k', ctrlKey: true });
 
     const palette = await screen.findByRole('dialog', { name: /command palette/i });
-    expect(within(palette).getByText('Open dashboard')).toBeVisible();
+    expect(within(palette).getByText('Go to Dashboard')).toBeVisible();
 
     fireEvent.keyDown(screen.getByPlaceholderText(/search commands/i), { key: 'Escape' });
 

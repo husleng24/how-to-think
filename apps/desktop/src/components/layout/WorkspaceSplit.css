@@ -1,0 +1,52 @@
+.workspace-split {
+  display: grid;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  background: #f4f1eb;
+}
+
+.workspace-split--map,
+.workspace-split--markdown {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.workspace-split-pane {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.workspace-split-pane.markdown-pane {
+  border-right: 1px solid #d9d2c4;
+  background: #fffdf8;
+}
+
+.workspace-split--markdown .workspace-split-pane.markdown-pane {
+  border-right: 0;
+}
+
+.workspace-split-resizer {
+  position: relative;
+  min-width: 10px;
+  background: #ede7dc;
+  cursor: col-resize;
+}
+
+.workspace-split-resizer::before {
+  position: absolute;
+  inset: 0 4px;
+  border-right: 1px solid #d4ccbe;
+  border-left: 1px solid #d4ccbe;
+  content: "";
+}
+
+.workspace-split-resizer:hover,
+.workspace-split-resizer:focus-visible {
+  background: #e3d8ca;
+  outline: 0;
+}
+
+.workspace-split-resizer:focus-visible::before {
+  border-color: #317682;
+}
