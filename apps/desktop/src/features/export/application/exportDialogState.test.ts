@@ -57,6 +57,26 @@ describe('export dialog state', () => {
     );
   });
 
+  it('rejects output paths that are not workspace-relative before submit', () => {
+    const context = exportContext();
+    const cases = [
+      ['C:/tmp/product-strategy.png', 'Output path must be relative to the workspace.'],
+      ['/tmp/product-strategy.png', 'Output path must be relative to the workspace.'],
+      ['maps\\product-strategy.png', 'Output path must use forward slashes.'],
+      ['maps/../product-strategy.png', 'Output path cannot contain dot segments.'],
+    ] as const;
+
+    for (const [outputPath, message] of cases) {
+      const state = {
+        ...createExportDialogState(context, 'png'),
+        outputPath,
+      };
+
+      expect(canSubmitExport(state, context)).toBe(false);
+      expect(exportDialogValidationMessages(state, context)).toContain(message);
+    }
+  });
+
   it('shows only options that apply to the selected format', () => {
     expect(exportFormatOptionAvailability('png')).toMatchObject({
       showPixelDensity: true,

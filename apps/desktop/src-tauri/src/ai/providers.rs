@@ -1,14 +1,12 @@
 use crate::atomic_write::write_file_atomically;
+use crate::ai::process::{run_provider_process, ProviderProcessOutput, ProviderProcessRequest};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
-use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::{AppHandle, Manager};
 
 pub const AI_PROVIDER_SETTINGS_FILE: &str = "ai-providers.json";
@@ -442,12 +440,12 @@ pub fn check_provider_health(provider: &AiProviderConfig) -> AiProviderHealthSta
     }
 
     match run_provider_health_command(provider, timer) {
-        Ok(output) if output.status.success() => AiProviderHealthStatus {
+        Ok(output) if output.success => AiProviderHealthStatus {
             status: AiProviderHealthState::Ok,
             checked_at: started,
             message: success_health_message(&output),
             detail: output_detail(&output, provider.max_output_bytes),
-            exit_code: output.status.code(),
+            exit_code: output.exit_code,
             duration_ms: Some(timer.elapsed().as_millis()),
         },
         Ok(output) => {
@@ -487,46 +485,30 @@ pub(crate) fn provider_store(app: &AppHandle) -> Result<AiProviderStore, AiProvi
 
 fn run_provider_health_command(
     provider: &AiProviderConfig,
-    timer: Instant,
-) -> Result<Output, HealthRunError> {
-    let mut command = Command::new(&provider.executable_path);
-    command
-        .args(&provider.health_check_args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
+    _timer: Instant,
+) -> Result<ProviderProcessOutput, HealthRunError> {
+    let output = run_provider_process(ProviderProcessRequest {
+        provider,
+        args: &provider.health_check_args,
+        stdin: None,
+        cancel_flag: None,
+    })
+    .map_err(|error| match error {
+        crate::ai::process::ProviderProcessError::Spawn(error)
+        | crate::ai::process::ProviderProcessError::Stdin(error)
+        | crate::ai::process::ProviderProcessError::Wait(error) => HealthRunError::Io(error),
+    })?;
 
-    if let Some(working_directory) = &provider.working_directory {
-        command.current_dir(working_directory);
-    }
-
-    if let Some(environment_allowlist) = &provider.environment_allowlist {
-        command.env_clear();
-        for name in environment_allowlist {
-            if let Ok(value) = env::var(name) {
-                command.env(name, value);
-            }
-        }
-    }
-
-    let mut child = command.spawn().map_err(HealthRunError::Io)?;
-    let timeout = Duration::from_secs(provider.timeout_seconds);
-    loop {
-        match child.try_wait().map_err(HealthRunError::Io)? {
-            Some(_) => return child.wait_with_output().map_err(HealthRunError::Io),
-            None if timer.elapsed() >= timeout => {
-                let _ = child.kill();
-                let _ = child.wait_with_output();
-                return Err(HealthRunError::Timeout);
-            }
-            None => thread::sleep(Duration::from_millis(20)),
-        }
+    if output.timed_out {
+        Err(HealthRunError::Timeout)
+    } else {
+        Ok(output)
     }
 }
 
 fn classify_non_zero_health(
     provider: &AiProviderConfig,
-    output: &Output,
+    output: &ProviderProcessOutput,
     checked_at: String,
     duration_ms: u128,
 ) -> AiProviderHealthStatus {
@@ -555,7 +537,7 @@ fn classify_non_zero_health(
         checked_at,
         message: message.to_owned(),
         detail,
-        exit_code: output.status.code(),
+        exit_code: output.exit_code,
         duration_ms: Some(duration_ms),
     }
 }
@@ -611,7 +593,7 @@ fn health_status_from_io_error(
     }
 }
 
-fn success_health_message(output: &Output) -> String {
+fn success_health_message(output: &ProviderProcessOutput) -> String {
     output_detail(output, 240)
         .and_then(|detail| {
             detail
@@ -622,14 +604,14 @@ fn success_health_message(output: &Output) -> String {
         .unwrap_or_else(|| "Provider health check completed successfully.".to_owned())
 }
 
-fn output_detail(output: &Output, max_bytes: usize) -> Option<String> {
+fn output_detail(output: &ProviderProcessOutput, max_bytes: usize) -> Option<String> {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(&output.stdout);
+    bytes.extend_from_slice(output.stdout.as_bytes());
     if !output.stderr.is_empty() {
         if !bytes.is_empty() {
             bytes.push(b'\n');
         }
-        bytes.extend_from_slice(&output.stderr);
+        bytes.extend_from_slice(output.stderr.as_bytes());
     }
 
     if bytes.is_empty() {
@@ -816,6 +798,15 @@ fn validate_executable_path(executable_path: &str) -> Result<(), AiProviderError
     }
 
     let path = Path::new(executable_path);
+    if is_blocked_shell_interpreter(path) {
+        return Err(AiProviderError::new(
+            AiProviderErrorCode::ShellCommandString,
+            "Shell interpreter executables are not allowed as AI providers because they can turn renderer input into local code execution.",
+            true,
+        )
+        .with_field("executablePath"));
+    }
+
     if !path.exists() {
         return Err(AiProviderError::new(
             AiProviderErrorCode::MissingExecutable,
@@ -845,6 +836,29 @@ fn validate_executable_path(executable_path: &str) -> Result<(), AiProviderError
     }
 
     Ok(())
+}
+
+fn is_blocked_shell_interpreter(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    let file_name = file_name.to_ascii_lowercase();
+
+    #[cfg(windows)]
+    {
+        matches!(
+            file_name.as_str(),
+            "cmd.exe" | "powershell.exe" | "pwsh.exe"
+        )
+    }
+
+    #[cfg(not(windows))]
+    {
+        matches!(
+            file_name.as_str(),
+            "sh" | "bash" | "zsh" | "fish" | "dash" | "ksh"
+        )
+    }
 }
 
 #[cfg(unix)]
@@ -1231,6 +1245,27 @@ mod tests {
         assert_eq!(status.status, AiProviderHealthState::Timeout);
     }
 
+    #[test]
+    fn rejects_shell_interpreter_executables() {
+        let Some(shell_path) = shell_interpreter_path() else {
+            return;
+        };
+        let error = provider_input(shell_path).into_config(None).unwrap_err();
+
+        assert_eq!(error.code, AiProviderErrorCode::ShellCommandString);
+        assert!(error.message.contains("local code execution"));
+    }
+
+    #[test]
+    fn health_check_handles_large_output_without_pipe_timeout() {
+        let provider = mock_provider(&["large", "131072"], 1);
+
+        let status = check_provider_health(&provider);
+
+        assert_eq!(status.status, AiProviderHealthState::Ok);
+        assert!(status.detail.as_deref().unwrap_or_default().len() >= DEFAULT_MAX_OUTPUT_BYTES);
+    }
+
     fn current_test_executable() -> String {
         std::env::current_exe().unwrap().display().to_string()
     }
@@ -1244,49 +1279,14 @@ mod tests {
             .to_string()
     }
 
-    #[cfg(windows)]
-    fn mock_executable_path() -> String {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".to_owned())
-    }
-
-    #[cfg(unix)]
-    fn mock_executable_path() -> String {
-        "/bin/sh".to_owned()
-    }
-
-    #[cfg(windows)]
     fn mock_provider(args: &[&str], timeout_seconds: u64) -> AiProviderConfig {
-        let command = match args.first().copied().unwrap_or("success") {
-            "success" => "echo provider-ok",
-            "auth" => "echo login required 1>&2 & exit /B 12",
-            "sleep" => "ping -n 4 127.0.0.1 >nul",
-            "exit" => {
-                let code = args.get(1).copied().unwrap_or("1");
-                return AiProviderConfig {
-                    id: "mock".to_owned(),
-                    display_name: "Mock".to_owned(),
-                    kind: AiProviderKind::Generic,
-                    executable_path: mock_executable_path(),
-                    argument_template: Vec::new(),
-                    health_check_args: vec!["/C".to_owned(), format!("exit /B {code}")],
-                    environment_allowlist: None,
-                    working_directory: None,
-                    timeout_seconds,
-                    max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-                    enabled: true,
-                    last_health_status: None,
-                };
-            }
-            _ => "echo provider-ok",
-        };
-
         AiProviderConfig {
             id: "mock".to_owned(),
             display_name: "Mock".to_owned(),
             kind: AiProviderKind::Generic,
-            executable_path: mock_executable_path(),
+            executable_path: mock_provider_executable(),
             argument_template: Vec::new(),
-            health_check_args: vec!["/C".to_owned(), command.to_owned()],
+            health_check_args: args.iter().map(|argument| (*argument).to_owned()).collect(),
             environment_allowlist: None,
             working_directory: None,
             timeout_seconds,
@@ -1296,46 +1296,104 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
-    fn mock_provider(args: &[&str], timeout_seconds: u64) -> AiProviderConfig {
-        let script = match args.first().copied().unwrap_or("success") {
-            "success" => "echo provider-ok",
-            "auth" => "echo 'login required' >&2; exit 12",
-            "sleep" => "sleep 3",
-            "exit" => {
-                let code = args.get(1).copied().unwrap_or("1");
-                return AiProviderConfig {
-                    id: "mock".to_owned(),
-                    display_name: "Mock".to_owned(),
-                    kind: AiProviderKind::Generic,
-                    executable_path: mock_executable_path(),
-                    argument_template: Vec::new(),
-                    health_check_args: vec!["-c".to_owned(), format!("exit {code}")],
-                    environment_allowlist: None,
-                    working_directory: None,
-                    timeout_seconds,
-                    max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-                    enabled: true,
-                    last_health_status: None,
-                };
-            }
-            _ => "echo provider-ok",
-        };
+    fn mock_provider_executable() -> String {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(mock_executable_name("mock-ai-provider"));
+        write_mock_provider_executable(&path);
+        std::mem::forget(temp);
+        path.display().to_string()
+    }
 
-        AiProviderConfig {
-            id: "mock".to_owned(),
-            display_name: "Mock".to_owned(),
-            kind: AiProviderKind::Generic,
-            executable_path: mock_executable_path(),
-            argument_template: Vec::new(),
-            health_check_args: vec!["-c".to_owned(), script.to_owned()],
-            environment_allowlist: None,
-            working_directory: None,
-            timeout_seconds,
-            max_output_bytes: DEFAULT_MAX_OUTPUT_BYTES,
-            enabled: true,
-            last_health_status: None,
-        }
+    #[cfg(windows)]
+    fn mock_executable_name(stem: &str) -> String {
+        format!("{stem}.cmd")
+    }
+
+    #[cfg(not(windows))]
+    fn mock_executable_name(stem: &str) -> String {
+        stem.to_owned()
+    }
+
+    #[cfg(windows)]
+    fn write_mock_provider_executable(path: &Path) {
+        fs::write(
+            path,
+            r#"@echo off
+if "%~1"=="success" (<nul set /p "=provider-ok" & exit /B 0)
+if "%~1"=="auth" (echo login required 1>&2 & exit /B 12)
+if "%~1"=="sleep" (ping -n 4 127.0.0.1 >nul & exit /B 0)
+if "%~1"=="exit" (
+  if "%~2"=="" (exit /B 1) else (exit /B %~2)
+)
+if "%~1"=="large" (
+  set MOCK_BYTES=%~2
+  if "%MOCK_BYTES%"=="" set MOCK_BYTES=131072
+  powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "[Console]::Out.Write(('x' * [int]$env:MOCK_BYTES))"
+  exit /B %ERRORLEVEL%
+)
+<nul set /p "=provider-ok"
+exit /B 0
+"#,
+        )
+        .unwrap();
+    }
+
+    #[cfg(not(windows))]
+    fn write_mock_provider_executable(path: &Path) {
+        fs::write(
+            path,
+            r#"#!/bin/sh
+case "${1:-success}" in
+  success)
+    printf '%s' 'provider-ok'
+    ;;
+  auth)
+    printf '%s\n' 'login required' >&2
+    exit 12
+    ;;
+  sleep)
+    sleep 3
+    ;;
+  exit)
+    exit "${2:-1}"
+    ;;
+  large)
+    bytes="${2:-131072}"
+    yes x | tr -d '\n' | head -c "$bytes"
+    ;;
+  *)
+    printf '%s' 'provider-ok'
+    ;;
+esac
+"#,
+        )
+        .unwrap();
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn shell_interpreter_path() -> Option<String> {
+        let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_owned());
+        [
+            format!("{windir}\\System32\\cmd.exe"),
+            format!("{windir}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+        ]
+        .into_iter()
+        .find(|candidate| Path::new(candidate).exists())
+    }
+
+    #[cfg(unix)]
+    fn shell_interpreter_path() -> Option<String> {
+        Some("/bin/sh".to_owned()).filter(|candidate| Path::new(candidate).exists())
     }
 
     fn executable_name(stem: &str) -> String {

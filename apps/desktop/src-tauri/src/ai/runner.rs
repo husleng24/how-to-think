@@ -1,4 +1,7 @@
 use crate::ai::errors::{AiError, AiErrorCode};
+use crate::ai::process::{
+    run_provider_process, ProviderProcessError, ProviderProcessOutput, ProviderProcessRequest,
+};
 use crate::ai::providers::{
     provider_store, validate_provider_config, AiProviderConfig, AiProviderError,
     AiProviderErrorCode, AiProviderSettings,
@@ -10,13 +13,9 @@ use crate::ai::session::{
 use chrono::Utc;
 use serde_json::Value;
 use std::collections::BTreeMap;
-use std::env;
-use std::io::{self, Read, Write};
-use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::{AppHandle, Emitter, State};
 
 pub const AI_RUN_STATUS_EVENT: &str = "ai-run-status";
@@ -32,25 +31,6 @@ pub struct AiRuntimeState {
 struct ActiveRun {
     run: AiRun,
     cancel_flag: Arc<AtomicBool>,
-}
-
-#[derive(Debug)]
-struct ProviderProcessOutput {
-    stdout: String,
-    stderr: String,
-    exit_code: Option<i32>,
-    success: bool,
-    stdout_truncated: bool,
-    stderr_truncated: bool,
-    timed_out: bool,
-    cancelled: bool,
-}
-
-#[derive(Debug)]
-enum ProviderRunError {
-    Spawn(io::Error),
-    Stdin(io::Error),
-    Wait(io::Error),
 }
 
 impl Default for AiRuntimeState {
@@ -146,7 +126,12 @@ pub fn run_ai_conversation(
 
     let envelope = build_prompt_envelope(&request, &prior_history);
     let started = Instant::now();
-    let process_result = run_provider_process(&provider, &envelope, cancel_flag);
+    let process_result = run_provider_process(ProviderProcessRequest {
+        provider: &provider,
+        args: &provider.argument_template,
+        stdin: Some(envelope.into_bytes()),
+        cancel_flag: Some(cancel_flag),
+    });
     let elapsed_ms = started.elapsed().as_millis();
     state.remove_active_run(&run_id);
 
@@ -582,26 +567,26 @@ fn finalize_process_start_error(
     key: &AiSessionKey,
     run: AiRun,
     provider_id: String,
-    error: ProviderRunError,
+    error: ProviderProcessError,
     elapsed_ms: u128,
     emit_event: &mut impl FnMut(AiRunEvent),
 ) -> Result<AiResponse, AiError> {
     let error = match error {
-        ProviderRunError::Spawn(error) => AiError::new(
+        ProviderProcessError::Spawn(error) => AiError::new(
             AiErrorCode::ProviderUnavailable,
             "The AI provider process could not be started.",
             true,
             "Verify the provider executable path and permissions, then try again.",
         )
         .with_detail(error.to_string()),
-        ProviderRunError::Stdin(error) => AiError::new(
+        ProviderProcessError::Stdin(error) => AiError::new(
             AiErrorCode::ProviderUnavailable,
             "The AI provider did not accept the prompt input.",
             true,
             "Verify the provider command reads from standard input or adjust its arguments.",
         )
         .with_detail(error.to_string()),
-        ProviderRunError::Wait(error) => AiError::new(
+        ProviderProcessError::Wait(error) => AiError::new(
             AiErrorCode::ProviderUnavailable,
             "The AI provider process result could not be collected.",
             true,
@@ -664,147 +649,6 @@ fn finalize_failed_run(
         error: Some(error.with_provider_id(provider_id)),
         diagnostics,
     })
-}
-
-fn run_provider_process(
-    provider: &AiProviderConfig,
-    prompt_envelope: &str,
-    cancel_flag: Arc<AtomicBool>,
-) -> Result<ProviderProcessOutput, ProviderRunError> {
-    let started = Instant::now();
-    let mut command = Command::new(&provider.executable_path);
-    command
-        .args(&provider.argument_template)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    if let Some(working_directory) = &provider.working_directory {
-        command.current_dir(working_directory);
-    }
-
-    if let Some(environment_allowlist) = &provider.environment_allowlist {
-        command.env_clear();
-        for name in environment_allowlist {
-            if let Ok(value) = env::var(name) {
-                command.env(name, value);
-            }
-        }
-    }
-
-    let mut child = command.spawn().map_err(ProviderRunError::Spawn)?;
-
-    let stdin = child.stdin.take();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let max_output_bytes = provider.max_output_bytes;
-    let stdout_reader =
-        stdout.map(|stdout| thread::spawn(move || read_stream_limited(stdout, max_output_bytes)));
-    let stderr_reader =
-        stderr.map(|stderr| thread::spawn(move || read_stream_limited(stderr, max_output_bytes)));
-    let prompt_input = prompt_envelope.as_bytes().to_vec();
-    let stdin_writer = stdin.map(|mut stdin| {
-        thread::spawn(move || match stdin.write_all(&prompt_input) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::BrokenPipe => Ok(()),
-            Err(error) => Err(error),
-        })
-    });
-    let timeout = Duration::from_secs(provider.timeout_seconds);
-    let mut timed_out = false;
-    let mut cancelled = false;
-
-    loop {
-        if cancel_flag.load(Ordering::SeqCst) {
-            cancelled = true;
-            let _ = child.kill();
-            break;
-        }
-
-        match child.try_wait().map_err(ProviderRunError::Wait)? {
-            Some(_) => break,
-            None if started.elapsed() >= timeout => {
-                timed_out = true;
-                let _ = child.kill();
-                break;
-            }
-            None => thread::sleep(Duration::from_millis(20)),
-        }
-    }
-
-    let status = child.wait().map_err(ProviderRunError::Wait)?;
-    if !timed_out && !cancelled {
-        join_stdin_writer(stdin_writer)?;
-    }
-    let stdout = join_reader(stdout_reader);
-    let stderr = join_reader(stderr_reader);
-
-    Ok(ProviderProcessOutput {
-        stdout: String::from_utf8_lossy(&stdout.bytes).to_string(),
-        stderr: String::from_utf8_lossy(&stderr.bytes).to_string(),
-        exit_code: status.code(),
-        success: status.success(),
-        stdout_truncated: stdout.truncated,
-        stderr_truncated: stderr.truncated,
-        timed_out,
-        cancelled,
-    })
-}
-
-fn read_stream_limited(mut stream: impl Read, max_bytes: usize) -> LimitedBytes {
-    let mut bytes = Vec::new();
-    let mut truncated = false;
-    let mut buffer = [0u8; 8192];
-
-    loop {
-        match stream.read(&mut buffer) {
-            Ok(0) => break,
-            Ok(read) => {
-                let remaining = max_bytes.saturating_sub(bytes.len());
-                if remaining > 0 {
-                    bytes.extend_from_slice(&buffer[..read.min(remaining)]);
-                }
-                if read > remaining {
-                    truncated = true;
-                }
-            }
-            Err(_) => {
-                truncated = true;
-                break;
-            }
-        }
-    }
-
-    LimitedBytes { bytes, truncated }
-}
-
-#[derive(Debug, Default)]
-struct LimitedBytes {
-    bytes: Vec<u8>,
-    truncated: bool,
-}
-
-fn join_reader(handle: Option<thread::JoinHandle<LimitedBytes>>) -> LimitedBytes {
-    handle
-        .and_then(|handle| handle.join().ok())
-        .unwrap_or_default()
-}
-
-fn join_stdin_writer(
-    handle: Option<thread::JoinHandle<Result<(), io::Error>>>,
-) -> Result<(), ProviderRunError> {
-    let Some(handle) = handle else {
-        return Ok(());
-    };
-
-    match handle.join() {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(error)) => Err(ProviderRunError::Stdin(error)),
-        Err(_) => Err(ProviderRunError::Stdin(io::Error::new(
-            io::ErrorKind::Other,
-            "provider stdin writer thread failed",
-        ))),
-    }
 }
 
 fn parse_provider_response(stdout: &str) -> Result<String, AiError> {
@@ -940,7 +784,11 @@ mod tests {
     use super::*;
     use crate::ai::context::{AiContextItem, AiContextItemKind, AiContextScope, AiContextSnapshot};
     use crate::ai::providers::{AiProviderHealthStatus, AiProviderKind};
+    use std::fs;
+    use std::path::Path;
     use std::sync::Mutex;
+    use std::thread;
+    use std::time::Duration;
 
     #[test]
     fn prompt_envelope_contains_context_history_and_latest_prompt() {
@@ -1167,18 +1015,14 @@ mod tests {
         }
     }
 
-    fn provider(
-        args: Vec<String>,
-        timeout_seconds: u64,
-        max_output_bytes: usize,
-    ) -> AiProviderConfig {
+    fn provider(script: String, timeout_seconds: u64, max_output_bytes: usize) -> AiProviderConfig {
         AiProviderConfig {
             id: "provider".to_owned(),
             display_name: "Mock Provider".to_owned(),
             kind: AiProviderKind::Generic,
-            executable_path: shell_executable(),
-            argument_template: args,
-            health_check_args: shell_success_args(),
+            executable_path: mock_provider_executable(script),
+            argument_template: Vec::new(),
+            health_check_args: Vec::new(),
             environment_allowlist: None,
             working_directory: None,
             timeout_seconds,
@@ -1196,23 +1040,19 @@ mod tests {
     }
 
     fn fixed_output_provider(output: &str, timeout_seconds: u64) -> AiProviderConfig {
-        provider(shell_echo_args(output), timeout_seconds, 64 * 1024)
+        provider(fixed_output_script(output), timeout_seconds, 64 * 1024)
     }
 
     fn stdin_echo_provider(timeout_seconds: u64) -> AiProviderConfig {
-        provider(shell_stdin_echo_args(), timeout_seconds, 64 * 1024)
+        provider(stdin_echo_script(), timeout_seconds, 64 * 1024)
     }
 
     fn non_zero_provider(exit_code: i32, stderr: &str, timeout_seconds: u64) -> AiProviderConfig {
-        provider(
-            shell_non_zero_args(exit_code, stderr),
-            timeout_seconds,
-            64 * 1024,
-        )
+        provider(non_zero_script(exit_code, stderr), timeout_seconds, 64 * 1024)
     }
 
     fn sleep_provider(timeout_seconds: u64) -> AiProviderConfig {
-        provider(shell_sleep_args(), timeout_seconds, 64 * 1024)
+        provider(sleep_script(), timeout_seconds, 64 * 1024)
     }
 
     fn long_output_provider(
@@ -1220,100 +1060,100 @@ mod tests {
         max_output_bytes: usize,
         timeout_seconds: u64,
     ) -> AiProviderConfig {
-        provider(
-            shell_long_output_args(bytes),
-            timeout_seconds,
-            max_output_bytes,
+        provider(long_output_script(bytes), timeout_seconds, max_output_bytes)
+    }
+
+    #[cfg(windows)]
+    fn fixed_output_script(output: &str) -> String {
+        format!(
+            "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$hex='{}'; [byte[]]$bytes = for ($i = 0; $i -lt $hex.Length; $i += 2) {{ [Convert]::ToByte($hex.Substring($i, 2), 16) }}; [Console]::OpenStandardOutput().Write($bytes, 0, $bytes.Length)\"\r\n",
+            hex_bytes(output.as_bytes())
+        )
+    }
+
+    #[cfg(unix)]
+    fn fixed_output_script(output: &str) -> String {
+        format!("#!/bin/sh\nprintf '%s' {}\n", shell_quote(output))
+    }
+
+    #[cfg(windows)]
+    fn stdin_echo_script() -> String {
+        "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)\"\r\n".to_owned()
+    }
+
+    #[cfg(unix)]
+    fn stdin_echo_script() -> String {
+        "#!/bin/sh\ncat\n".to_owned()
+    }
+
+    #[cfg(windows)]
+    fn non_zero_script(exit_code: i32, stderr: &str) -> String {
+        format!(
+            "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"$hex='{}'; [byte[]]$bytes = for ($i = 0; $i -lt $hex.Length; $i += 2) {{ [Convert]::ToByte($hex.Substring($i, 2), 16) }}; [Console]::OpenStandardError().Write($bytes, 0, $bytes.Length); exit {exit_code}\"\r\n",
+            hex_bytes(stderr.as_bytes())
+        )
+    }
+
+    #[cfg(unix)]
+    fn non_zero_script(exit_code: i32, stderr: &str) -> String {
+        format!(
+            "#!/bin/sh\nprintf '%s' {} >&2\nexit {exit_code}\n",
+            shell_quote(stderr)
         )
     }
 
     #[cfg(windows)]
-    fn shell_executable() -> String {
-        std::env::var("WINDIR")
-            .map(|windir| format!("{windir}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"))
-            .unwrap_or_else(|_| {
-                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe".to_owned()
-            })
+    fn sleep_script() -> String {
+        "@echo off\r\nping -n 4 127.0.0.1 >nul\r\n".to_owned()
     }
 
     #[cfg(unix)]
-    fn shell_executable() -> String {
-        "/bin/sh".to_owned()
+    fn sleep_script() -> String {
+        "#!/bin/sh\nsleep 3\n".to_owned()
     }
 
     #[cfg(windows)]
-    fn shell_success_args() -> Vec<String> {
-        powershell_command("[Console]::Out.Write('ok')")
+    fn long_output_script(bytes: usize) -> String {
+        format!(
+            "@echo off\r\npowershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"[Console]::Out.Write(('x' * {bytes}))\"\r\n"
+        )
     }
 
     #[cfg(unix)]
-    fn shell_success_args() -> Vec<String> {
-        vec!["-c".to_owned(), "echo ok".to_owned()]
+    fn long_output_script(bytes: usize) -> String {
+        format!("#!/bin/sh\nyes x | tr -d '\\n' | head -c {bytes}\n")
+    }
+
+    fn mock_provider_executable(script: String) -> String {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(mock_executable_name("mock-ai-provider"));
+        fs::write(&path, script).unwrap();
+        make_executable(&path);
+        std::mem::forget(temp);
+        path.display().to_string()
     }
 
     #[cfg(windows)]
-    fn shell_echo_args(output: &str) -> Vec<String> {
-        powershell_command(&format!(
-            "[Console]::Out.Write('{}')",
-            powershell_quote(output)
-        ))
+    fn mock_executable_name(stem: &str) -> String {
+        format!("{stem}.cmd")
+    }
+
+    #[cfg(not(windows))]
+    fn mock_executable_name(stem: &str) -> String {
+        stem.to_owned()
     }
 
     #[cfg(unix)]
-    fn shell_echo_args(output: &str) -> Vec<String> {
-        vec![
-            "-c".to_owned(),
-            format!("printf '%s' {}", shell_quote(output)),
-        ]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
     }
 
-    #[cfg(windows)]
-    fn shell_stdin_echo_args() -> Vec<String> {
-        powershell_command("$text = [Console]::In.ReadToEnd(); [Console]::Out.Write($text)")
-    }
-
-    #[cfg(unix)]
-    fn shell_stdin_echo_args() -> Vec<String> {
-        vec!["-c".to_owned(), "cat".to_owned()]
-    }
-
-    #[cfg(windows)]
-    fn shell_non_zero_args(exit_code: i32, stderr: &str) -> Vec<String> {
-        powershell_command(&format!(
-            "[Console]::Error.Write('{}'); exit {exit_code}",
-            powershell_quote(stderr)
-        ))
-    }
-
-    #[cfg(unix)]
-    fn shell_non_zero_args(exit_code: i32, stderr: &str) -> Vec<String> {
-        vec![
-            "-c".to_owned(),
-            format!("echo {} >&2; exit {exit_code}", shell_quote(stderr)),
-        ]
-    }
-
-    #[cfg(windows)]
-    fn shell_sleep_args() -> Vec<String> {
-        powershell_command("Start-Sleep -Seconds 3")
-    }
-
-    #[cfg(unix)]
-    fn shell_sleep_args() -> Vec<String> {
-        vec!["-c".to_owned(), "sleep 3".to_owned()]
-    }
-
-    #[cfg(windows)]
-    fn shell_long_output_args(bytes: usize) -> Vec<String> {
-        powershell_command(&format!("[Console]::Out.Write(('x' * {bytes}))"))
-    }
-
-    #[cfg(unix)]
-    fn shell_long_output_args(bytes: usize) -> Vec<String> {
-        vec![
-            "-c".to_owned(),
-            format!("yes x | tr -d '\\n' | head -c {bytes}"),
-        ]
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {
     }
 
     #[cfg(unix)]
@@ -1322,18 +1162,8 @@ mod tests {
     }
 
     #[cfg(windows)]
-    fn powershell_command(script: &str) -> Vec<String> {
-        vec![
-            "-NoProfile".to_owned(),
-            "-NonInteractive".to_owned(),
-            "-Command".to_owned(),
-            script.to_owned(),
-        ]
-    }
-
-    #[cfg(windows)]
-    fn powershell_quote(value: &str) -> String {
-        value.replace('\'', "''")
+    fn hex_bytes(bytes: &[u8]) -> String {
+        bytes.iter().map(|byte| format!("{byte:02x}")).collect()
     }
 
     fn wait_for_active_run(state: &AiRuntimeState) -> String {

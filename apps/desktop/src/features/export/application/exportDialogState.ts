@@ -249,6 +249,11 @@ export function exportDialogValidationMessages(
 
   if (!state.outputPath.trim()) {
     messages.push('Output path is required.');
+  } else {
+    const outputPathMessage = validateExportOutputPath(state.outputPath);
+    if (outputPathMessage) {
+      messages.push(outputPathMessage);
+    }
   }
 
   if (state.scopeType === 'selected_branch' && !selectedBranchAvailable(context)) {
@@ -284,6 +289,24 @@ export function exportDialogValidationMessages(
   }
 
   return messages;
+}
+
+function validateExportOutputPath(outputPath: string): string | null {
+  const trimmed = outputPath.trim();
+
+  if (/^[A-Za-z]:([/\\]|$)/.test(trimmed) || trimmed.startsWith('/') || trimmed.startsWith('//')) {
+    return 'Output path must be relative to the workspace.';
+  }
+
+  if (trimmed.includes('\\')) {
+    return 'Output path must use forward slashes.';
+  }
+
+  if (trimmed.split('/').some((segment) => segment === '.' || segment === '..')) {
+    return 'Output path cannot contain dot segments.';
+  }
+
+  return null;
 }
 
 export function canSubmitExport(

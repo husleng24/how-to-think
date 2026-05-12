@@ -63,6 +63,7 @@ describe('Git service contract', () => {
       'file_not_in_history',
       'external_state_changed',
       'restore_conflict',
+      'git_timed_out',
       'unknown_git_error',
     ]);
   });

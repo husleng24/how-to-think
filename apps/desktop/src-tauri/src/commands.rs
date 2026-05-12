@@ -668,61 +668,65 @@ fn resolve_export_output_path(
     output_path: &str,
     format: &str,
 ) -> Result<ResolvedExportPath, ExportErrorPayload> {
-    validate_export_extension(output_path, format)?;
-    let trimmed = output_path.trim();
-    let candidate = Path::new(trimmed);
-
-    if candidate.is_absolute() {
-        return Ok(ResolvedExportPath {
-            absolute_path: candidate.to_path_buf(),
-            display_path: candidate.display().to_string(),
-        });
-    }
-
-    let relative_path = validate_export_relative_path(trimmed)?;
-    if let Some(workspace_id) = request_workspace_id(request) {
-        let record = workspace_record_for_id(app, workspace_id, WorkspaceOperation::SaveFile)
-            .map_err(|error| {
-                export_error(
-                    "output_not_writable",
-                    "The selected workspace is unavailable for this export path.",
-                    true,
-                    Some(json!({
-                        "workspaceId": workspace_id,
-                        "reason": error.to_string(),
-                    })),
-                )
-            })?;
-        let absolute_path = record
-            .canonical_root
-            .join(relative_path.split('/').collect::<PathBuf>());
-
-        return Ok(ResolvedExportPath {
-            absolute_path,
-            display_path: record
-                .canonical_root
-                .join(relative_path.split('/').collect::<PathBuf>())
-                .display()
-                .to_string(),
-        });
-    }
-
-    let current_dir = std::env::current_dir().map_err(|error| {
-        export_error(
-            "output_not_writable",
-            "The current working directory is unavailable for this export path.",
-            true,
-            Some(json!({ "reason": error.to_string() })),
-        )
-    })?;
+    let relative_path = validate_desktop_export_output_path(output_path, format)?;
+    let workspace_id = request_workspace_id(request)
+        .ok_or_else(|| missing_workspace_export_output_path_error(&relative_path))?;
+    let record = workspace_record_for_id(app, workspace_id, WorkspaceOperation::SaveFile).map_err(
+        |error| {
+            export_error(
+                "output_not_writable",
+                "The selected workspace is unavailable for this export path.",
+                true,
+                Some(json!({
+                    "workspaceId": workspace_id,
+                    "reason": error.to_string(),
+                })),
+            )
+        },
+    )?;
+    let absolute_path = record
+        .canonical_root
+        .join(relative_path.split('/').collect::<PathBuf>());
 
     Ok(ResolvedExportPath {
-        absolute_path: current_dir.join(relative_path.split('/').collect::<PathBuf>()),
-        display_path: current_dir
-            .join(relative_path.split('/').collect::<PathBuf>())
-            .display()
-            .to_string(),
+        display_path: absolute_path.display().to_string(),
+        absolute_path,
     })
+}
+
+fn validate_desktop_export_output_path(
+    output_path: &str,
+    format: &str,
+) -> Result<String, ExportErrorPayload> {
+    validate_export_extension(output_path, format)?;
+    let trimmed = output_path.trim();
+
+    if is_absolute_export_output_path(trimmed) {
+        return Err(export_error(
+            "absolute_output_path_not_allowed",
+            "Desktop export output paths must be relative to the selected workspace.",
+            true,
+            Some(json!({ "outputPath": output_path })),
+        ));
+    }
+
+    validate_export_relative_path(trimmed)
+}
+
+fn is_absolute_export_output_path(path: &str) -> bool {
+    Path::new(path).is_absolute()
+        || has_windows_drive_prefix(path)
+        || path.starts_with('/')
+        || path.starts_with("//")
+}
+
+fn missing_workspace_export_output_path_error(output_path: &str) -> ExportErrorPayload {
+    export_error(
+        "output_not_writable",
+        "Desktop export output paths require a selected workspace.",
+        true,
+        Some(json!({ "outputPath": output_path })),
+    )
 }
 
 fn prepare_export_output(
@@ -1099,4 +1103,26 @@ fn workspace_error_to_git_error(
     };
 
     GitOperationError::new(code, operation, error.message, error.recoverable)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn desktop_export_output_path_rejects_absolute_paths() {
+        for path in ["C:/tmp/product-strategy.png", "/tmp/product-strategy.png"] {
+            let error = validate_desktop_export_output_path(path, "png").unwrap_err();
+
+            assert_eq!(error.code, "absolute_output_path_not_allowed");
+        }
+    }
+
+    #[test]
+    fn desktop_export_output_path_rejects_paths_without_workspace_context() {
+        let error = missing_workspace_export_output_path_error("maps/product-strategy.png");
+
+        assert_eq!(error.code, "output_not_writable");
+        assert!(error.message.contains("workspace"));
+    }
 }

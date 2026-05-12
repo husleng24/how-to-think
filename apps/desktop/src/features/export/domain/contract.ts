@@ -53,6 +53,7 @@ export const EXPORT_ERROR_CODES: Readonly<Record<string, ExportErrorCode>> = {
   INVALID_EXPORT_DIMENSIONS: 'invalid_export_dimensions',
   INCOMPATIBLE_EXPORT_OPTIONS: 'incompatible_export_options',
   INVALID_RENDER_SNAPSHOT: 'invalid_render_snapshot',
+  ABSOLUTE_OUTPUT_PATH_NOT_ALLOWED: 'absolute_output_path_not_allowed',
   OUTPUT_PATH_CONFLICT: 'output_path_conflict',
   OUTPUT_NOT_WRITABLE: 'output_not_writable',
   SOURCE_FILE_MISSING: 'source_file_missing',

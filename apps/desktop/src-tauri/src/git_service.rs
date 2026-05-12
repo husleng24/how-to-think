@@ -20,9 +20,11 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Child, Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 
 const DEFAULT_GIT_EXECUTABLE: &str = "git";
 const DEFAULT_HISTORY_LIMIT: usize = 100;
@@ -31,6 +33,7 @@ const MAX_DIFF_BYTES: usize = 512 * 1024;
 const MAX_DIFF_FILES: usize = 100;
 const MAX_DIFF_LINES: usize = 2_000;
 const MAX_DIFF_HUNKS_PER_FILE: usize = 200;
+const GIT_COMMAND_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn detect_repository(
     record: &WorkspaceRecord,
@@ -83,6 +86,7 @@ pub fn restore_git_file(
 #[derive(Debug, Clone)]
 struct GitRepositoryService {
     git_executable: String,
+    command_timeout: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -114,6 +118,7 @@ impl Default for GitRepositoryService {
     fn default() -> Self {
         Self {
             git_executable: DEFAULT_GIT_EXECUTABLE.to_owned(),
+            command_timeout: GIT_COMMAND_TIMEOUT,
         }
     }
 }
@@ -123,6 +128,18 @@ impl GitRepositoryService {
     fn with_executable(git_executable: impl Into<String>) -> Self {
         Self {
             git_executable: git_executable.into(),
+            command_timeout: GIT_COMMAND_TIMEOUT,
+        }
+    }
+
+    #[cfg(test)]
+    fn with_executable_and_timeout(
+        git_executable: impl Into<String>,
+        command_timeout: Duration,
+    ) -> Self {
+        Self {
+            git_executable: git_executable.into(),
+            command_timeout,
         }
     }
 
@@ -1059,6 +1076,7 @@ impl GitRepositoryService {
         let args = vec![
             OsString::from("commit"),
             OsString::from("--quiet"),
+            OsString::from("--no-verify"),
             OsString::from("--message"),
             OsString::from(message),
         ];
@@ -1367,6 +1385,8 @@ impl GitRepositoryService {
             Err(error) => Err(GitOperationError::new(
                 if error.kind() == io::ErrorKind::PermissionDenied {
                     GitOperationErrorCode::PermissionDenied
+                } else if error.kind() == io::ErrorKind::TimedOut {
+                    GitOperationErrorCode::GitTimedOut
                 } else {
                     GitOperationErrorCode::GitUnavailable
                 },
@@ -1550,7 +1570,11 @@ impl GitRepositoryService {
         S: AsRef<OsStr>,
     {
         let mut command = Command::new(&self.git_executable);
-        command.args(args);
+        command
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }
@@ -1561,8 +1585,68 @@ impl GitRepositoryService {
             .env("GIT_TERMINAL_PROMPT", "0")
             .env("GIT_EDITOR", ":")
             .env("GIT_PAGER", "cat")
-            .envs(env.iter().copied())
-            .output()
+            .envs(env.iter().copied());
+
+        let child = command.spawn()?;
+        wait_for_git_command(child, self.command_timeout)
+    }
+}
+
+fn wait_for_git_command(mut child: Child, timeout: Duration) -> io::Result<Output> {
+    let stdout = child
+        .stdout
+        .take()
+        .map(|stdout| thread::spawn(move || read_git_stream(stdout)));
+    let stderr = child
+        .stderr
+        .take()
+        .map(|stderr| thread::spawn(move || read_git_stream(stderr)));
+    let started = Instant::now();
+
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = join_git_reader(stdout);
+            let _ = join_git_reader(stderr);
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "Git command timed out",
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(20));
+    };
+
+    let stdout = join_git_reader(stdout)?;
+    let stderr = join_git_reader(stderr)?;
+
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_git_stream(mut stream: impl Read) -> io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
+}
+
+fn join_git_reader(handle: Option<thread::JoinHandle<io::Result<Vec<u8>>>>) -> io::Result<Vec<u8>> {
+    match handle {
+        Some(handle) => handle.join().unwrap_or_else(|_| {
+            Err(io::Error::new(
+                io::ErrorKind::Other,
+                "Git output reader thread failed",
+            ))
+        }),
+        None => Ok(Vec::new()),
     }
 }
 
@@ -2672,6 +2756,8 @@ fn git_error_from_io(operation: GitServiceOperation, error: &io::Error) -> GitOp
     GitOperationError::new(
         if error.kind() == io::ErrorKind::PermissionDenied {
             GitOperationErrorCode::PermissionDenied
+        } else if error.kind() == io::ErrorKind::TimedOut {
+            GitOperationErrorCode::GitTimedOut
         } else if error.kind() == io::ErrorKind::NotFound {
             GitOperationErrorCode::GitUnavailable
         } else {
@@ -3003,6 +3089,92 @@ mod tests {
             omitted_byte_count: 0,
         }
     }
+
+    #[test]
+    fn snapshot_commit_does_not_execute_workspace_hooks() {
+        let temp = tempfile::tempdir().unwrap();
+        git(temp.path(), &["init", "--quiet"]);
+        configure_identity(temp.path());
+        let record = record_for(temp.path());
+        fs::write(temp.path().join("idea.md"), "# Idea\n").unwrap();
+        let status = service().status(&record).unwrap();
+        let hook_marker = temp.path().join("hook-ran");
+        install_failing_pre_commit_hook(temp.path(), &hook_marker);
+
+        let result = service().create_snapshot(
+            &record,
+            snapshot_request(&record, &status, "Snapshot with hook present"),
+        );
+
+        assert!(result.is_ok(), "{result:?}");
+        assert!(
+            !hook_marker.exists(),
+            "pre-commit hook should not run during desktop snapshots"
+        );
+    }
+
+    #[test]
+    fn timed_out_git_command_returns_git_timed_out() {
+        let mock = slow_git_executable();
+        let service =
+            GitRepositoryService::with_executable_and_timeout(mock.display().to_string(), Duration::from_millis(100));
+
+        let error = service.backend_info().unwrap_err();
+
+        assert_eq!(error.code, GitOperationErrorCode::GitTimedOut);
+    }
+
+    fn install_failing_pre_commit_hook(repository_root: &Path, marker_path: &Path) {
+        let hook = repository_root.join(".git/hooks/pre-commit");
+        let marker = marker_path.display().to_string().replace('\\', "/");
+        fs::write(
+            &hook,
+            format!("#!/bin/sh\necho hook-ran > \"{marker}\"\nexit 9\n"),
+        )
+        .unwrap();
+        make_executable(&hook);
+    }
+
+    fn slow_git_executable() -> PathBuf {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(executable_name("slow-git"));
+        write_slow_executable(&path);
+        std::mem::forget(temp);
+        path
+    }
+
+    #[cfg(windows)]
+    fn executable_name(name: &str) -> String {
+        format!("{name}.cmd")
+    }
+
+    #[cfg(not(windows))]
+    fn executable_name(name: &str) -> String {
+        name.to_owned()
+    }
+
+    #[cfg(windows)]
+    fn write_slow_executable(path: &Path) {
+        fs::write(path, "@echo off\r\nping -n 4 127.0.0.1 >nul\r\nexit /B 0\r\n").unwrap();
+    }
+
+    #[cfg(not(windows))]
+    fn write_slow_executable(path: &Path) {
+        fs::write(path, "#!/bin/sh\nsleep 3\n").unwrap();
+        make_executable(path);
+    }
+
+    #[cfg(unix)]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = fs::metadata(path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        fs::set_permissions(path, permissions).unwrap();
+    }
+
+    #[cfg(not(unix))]
+    fn make_executable(_path: &Path) {}
 
     #[test]
     fn normalizes_porcelain_status_to_workspace_entries_and_counts() {

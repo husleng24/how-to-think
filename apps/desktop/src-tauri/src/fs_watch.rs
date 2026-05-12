@@ -12,11 +12,14 @@ use crate::time_utils::now_iso;
 use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{mpsc, Arc, Mutex, MutexGuard};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter};
 
 const EXTERNAL_CHANGE_EVENT: &str = "workspace://external-change";
 const WATCH_ERROR_EVENT: &str = "workspace://watch-error";
+const WATCH_DEBOUNCE: Duration = Duration::from_millis(150);
 
 #[derive(Default)]
 pub struct WorkspaceWatchState {
@@ -27,8 +30,14 @@ struct ActiveWorkspaceWatch {
     workspace_id: String,
     detector: Arc<Mutex<WorkspaceChangeDetector>>,
     _watcher: Option<RecommendedWatcher>,
+    _worker: Option<thread::JoinHandle<()>>,
     watcher_active: bool,
     watch_error: Option<WorkspaceError>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct WatchRefreshHint {
+    repository_metadata_hint: bool,
 }
 
 #[derive(Debug)]
@@ -45,10 +54,15 @@ impl WorkspaceWatchState {
         record: WorkspaceRecord,
     ) -> Result<ExternalChangeBatch, WorkspaceError> {
         let detector = Arc::new(Mutex::new(WorkspaceChangeDetector::new(record.clone())?));
-        let detector_for_callback = Arc::clone(&detector);
         let app_for_callback = app.clone();
         let workspace_root = record.canonical_root.clone();
         let mut watch_error = None;
+        let (refresh_sender, refresh_receiver) = mpsc::channel();
+        let worker = Some(spawn_watch_refresh_worker(
+            app.clone(),
+            Arc::clone(&detector),
+            refresh_receiver,
+        ));
 
         let watcher = match RecommendedWatcher::new(
             move |result: notify::Result<notify::Event>| match result {
@@ -57,26 +71,9 @@ impl WorkspaceWatchState {
                         .paths
                         .iter()
                         .any(|path| is_repository_metadata_path(path));
-                    let refresh = detector_for_callback
-                        .lock()
-                        .map_err(|_| poisoned_watch_error())
-                        .and_then(|mut detector| {
-                            detector.refresh(ExternalChangeSource::Watcher, true, None)
-                        });
-
-                    match refresh {
-                        Ok(batch)
-                            if !batch.events.is_empty()
-                                || batch.repository_state_changed
-                                || repository_metadata_hint =>
-                        {
-                            let _ = app_for_callback.emit(EXTERNAL_CHANGE_EVENT, batch);
-                        }
-                        Ok(_) => {}
-                        Err(error) => {
-                            let _ = app_for_callback.emit(WATCH_ERROR_EVENT, error);
-                        }
-                    }
+                    let _ = refresh_sender.send(WatchRefreshHint {
+                        repository_metadata_hint,
+                    });
                 }
                 Err(error) => {
                     let _ = app_for_callback.emit(WATCH_ERROR_EVENT, watch_unavailable(error));
@@ -109,6 +106,7 @@ impl WorkspaceWatchState {
             workspace_id: record.info.id.clone(),
             detector,
             _watcher: watcher,
+            _worker: worker,
             watcher_active,
             watch_error,
         });
@@ -143,6 +141,7 @@ impl WorkspaceWatchState {
             workspace_id: record.info.id,
             detector,
             _watcher: None,
+            _worker: None,
             watcher_active: false,
             watch_error: None,
         });
@@ -164,6 +163,49 @@ impl WorkspaceWatchState {
     fn lock_active(&self) -> Result<MutexGuard<'_, Option<ActiveWorkspaceWatch>>, WorkspaceError> {
         self.active.lock().map_err(|_| poisoned_watch_error())
     }
+}
+
+fn spawn_watch_refresh_worker(
+    app: AppHandle,
+    detector: Arc<Mutex<WorkspaceChangeDetector>>,
+    receiver: mpsc::Receiver<WatchRefreshHint>,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        while let Ok(first_hint) = receiver.recv() {
+            let hint = drain_debounced_watch_hints(first_hint, &receiver, WATCH_DEBOUNCE);
+            let refresh = detector
+                .lock()
+                .map_err(|_| poisoned_watch_error())
+                .and_then(|mut detector| {
+                    detector.refresh(ExternalChangeSource::Watcher, true, None)
+                });
+
+            match refresh {
+                Ok(batch)
+                    if !batch.events.is_empty()
+                        || batch.repository_state_changed
+                        || hint.repository_metadata_hint =>
+                {
+                    let _ = app.emit(EXTERNAL_CHANGE_EVENT, batch);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    let _ = app.emit(WATCH_ERROR_EVENT, error);
+                }
+            }
+        }
+    })
+}
+
+fn drain_debounced_watch_hints(
+    mut hint: WatchRefreshHint,
+    receiver: &mpsc::Receiver<WatchRefreshHint>,
+    debounce: Duration,
+) -> WatchRefreshHint {
+    while let Ok(next) = receiver.recv_timeout(debounce) {
+        hint.repository_metadata_hint |= next.repository_metadata_hint;
+    }
+    hint
 }
 
 impl WorkspaceChangeDetector {
@@ -686,6 +728,26 @@ mod tests {
         assert!(!is_repository_metadata_path(std::path::Path::new(
             "workspace/notes/idea.md"
         )));
+    }
+
+    #[test]
+    fn debounce_hint_collection_merges_repository_metadata_events() {
+        let (sender, receiver) = mpsc::channel();
+        sender
+            .send(WatchRefreshHint {
+                repository_metadata_hint: true,
+            })
+            .unwrap();
+
+        let hint = drain_debounced_watch_hints(
+            WatchRefreshHint {
+                repository_metadata_hint: false,
+            },
+            &receiver,
+            Duration::from_millis(1),
+        );
+
+        assert!(hint.repository_metadata_hint);
     }
 
     #[test]

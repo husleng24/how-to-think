@@ -2909,6 +2909,7 @@ fn cli_error_code_for_ai_error(code: AiErrorCode) -> CliErrorCode {
 fn cli_error_code_for_git_error(code: GitOperationErrorCode) -> CliErrorCode {
     match code {
         GitOperationErrorCode::GitUnavailable => CliErrorCode::GitUnavailable,
+        GitOperationErrorCode::GitTimedOut => CliErrorCode::GitUnavailable,
         GitOperationErrorCode::ExternalStateChanged => CliErrorCode::ExternalStateChanged,
         GitOperationErrorCode::RestoreConflict => CliErrorCode::DirtyStateConflict,
         GitOperationErrorCode::InvalidRef => CliErrorCode::InvalidArguments,

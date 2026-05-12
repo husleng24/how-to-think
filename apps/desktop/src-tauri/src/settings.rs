@@ -1,3 +1,4 @@
+use crate::atomic_write::write_file_atomically;
 use crate::errors::{WorkspaceError, WorkspaceErrorCode, WorkspaceOperation};
 use crate::models::{WorkspaceRecord, WorkspaceRelativePath};
 use crate::path_guard::validate_workspace_relative_path;
@@ -80,7 +81,7 @@ impl SettingsStore {
             .with_detail("source", error.to_string())
         })?;
 
-        fs::write(&self.path, content).map_err(|error| {
+        write_file_atomically(&self.path, &content).map_err(|error| {
             WorkspaceError::from_io(WorkspaceOperation::LoadWorkspace, None, &error)
                 .with_detail("settingsPath", self.path.display().to_string())
         })
@@ -289,6 +290,29 @@ mod tests {
         let store = SettingsStore::new(temp.path().join("settings/workspaces.json"));
 
         assert_eq!(store.load().unwrap(), WorkspaceSettings::default());
+    }
+
+    #[test]
+    fn save_round_trips_repeated_writes_without_temp_leftovers() {
+        let temp = tempfile::tempdir().unwrap();
+        let store_path = temp.path().join("settings/workspaces.json");
+        let store = SettingsStore::new(&store_path);
+        let mut settings = WorkspaceSettings {
+            remembered_workspace_id: Some("workspace-one".to_owned()),
+            ..WorkspaceSettings::default()
+        };
+
+        store.save(&settings).unwrap();
+        settings.remembered_workspace_id = Some("workspace-two".to_owned());
+        store.save(&settings).unwrap();
+
+        assert_eq!(store.load().unwrap(), settings);
+        let leftovers: Vec<_> = fs::read_dir(store_path.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty());
     }
 
     #[test]

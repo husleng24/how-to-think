@@ -84,14 +84,22 @@ how-to-think restore ./ideas.md --commit <sha>
 
 ## Architecture
 
+Current repository structure:
+
 ```text
 how-to-think/
   apps/
-    desktop/          # Tauri + React desktop app
-    cli/              # Native CLI entry point
+    desktop/          # Tauri + React desktop app, Rust backend commands, and native CLI binary
   crates/
-    core/             # Markdown model, mind map operations, command system
     markdown/         # Markdown parsing, serialization, Obsidian/Markmap compatibility
+```
+
+Planned roadmap split:
+
+```text
+how-to-think/
+  crates/
+    core/             # Shared Markdown model, mind map operations, command system
     git/              # Git history, diff, restore, repository operations
     ai/               # Local agent adapters for Codex, Claude, and custom commands
   packages/
@@ -174,7 +182,7 @@ Git is treated as a first-class product feature, not as an external afterthought
 
 ## Development Status
 
-This project is in the planning and early implementation stage. The README defines the product direction, core requirements, and intended architecture.
+This project is in active desktop implementation. The current app lives under `apps/desktop`, with its Rust/Tauri backend and native CLI entry point in `apps/desktop/src-tauri`; shared Markdown parsing lives in `crates/markdown`. The broader `crates/*` and `packages/*` split remains a roadmap target.
 
 ## Name
 

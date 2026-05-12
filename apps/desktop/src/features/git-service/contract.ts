@@ -32,6 +32,7 @@ export const GIT_OPERATION_ERROR_CODES = [
   'file_not_in_history',
   'external_state_changed',
   'restore_conflict',
+  'git_timed_out',
   'unknown_git_error',
 ] as const satisfies readonly GitOperationErrorCode[];
 

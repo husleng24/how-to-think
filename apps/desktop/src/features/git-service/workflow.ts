@@ -479,6 +479,8 @@ export function gitOperationErrorTitle(code: GitOperationErrorCode): string {
       return 'File not in history';
     case 'restore_conflict':
       return 'Restore blocked';
+    case 'git_timed_out':
+      return 'Git timed out';
     case 'merge_conflict':
       return 'Merge conflict active';
     case 'detached_head':

@@ -61,6 +61,12 @@ and restore commands through Tauri:
 
 Diff responses are bounded by backend byte, file, hunk, and line limits and include explicit truncation metadata when content is omitted.
 
+## Security Defaults
+
+- Desktop exports write only to workspace-relative output paths. Absolute paths are rejected by the Tauri command layer; use the native CLI for scripted exports that intentionally target arbitrary absolute paths.
+- Desktop Git snapshots pass `--no-verify` so workspace hooks are not executed from renderer-triggered commits.
+- AI provider executable paths cannot point at shell interpreters such as `cmd.exe`, PowerShell, `sh`, or `bash`; this keeps provider configuration from becoming renderer-controlled local code execution.
+
 ## Core Editor Validation
 
 Run these commands from the repository root before reporting editor implementation completion:

@@ -225,6 +225,7 @@ export type ExportErrorCode =
   | 'invalid_export_dimensions'
   | 'incompatible_export_options'
   | 'invalid_render_snapshot'
+  | 'absolute_output_path_not_allowed'
   | 'output_path_conflict'
   | 'output_not_writable'
   | 'source_file_missing'

@@ -23,6 +23,7 @@ pub enum GitOperationErrorCode {
     FileNotInHistory,
     ExternalStateChanged,
     RestoreConflict,
+    GitTimedOut,
     UnknownGitError,
 }
 
@@ -140,6 +141,7 @@ pub const GIT_OPERATION_ERROR_CODES: &[GitOperationErrorCode] = &[
     GitOperationErrorCode::FileNotInHistory,
     GitOperationErrorCode::ExternalStateChanged,
     GitOperationErrorCode::RestoreConflict,
+    GitOperationErrorCode::GitTimedOut,
     GitOperationErrorCode::UnknownGitError,
 ];
 
@@ -896,6 +898,14 @@ mod tests {
                 validate_git_workspace_relative_path(path, GitServiceOperation::Diff).unwrap_err();
             assert_eq!(error.code, GitOperationErrorCode::PermissionDenied);
         }
+    }
+
+    #[test]
+    fn documents_git_timeout_error_code() {
+        let serialized = serde_json::to_value(GitOperationErrorCode::GitTimedOut).unwrap();
+
+        assert_eq!(serialized, json!("git_timed_out"));
+        assert!(GIT_OPERATION_ERROR_CODES.contains(&GitOperationErrorCode::GitTimedOut));
     }
 
     #[test]
